@@ -70,8 +70,9 @@ default registry/marketplace source points at the fork
 (`gh:ScoFan-official/oh-my-trellis/marketplace`); custom
 `--workflow-source` / `--registry` overrides are unchanged upstream plumbing.
 
-`.github/workflows/publish.yml` is upstream's npm pipeline and stays dormant
-on the fork (no `NPM_TOKEN`, no `v*` tags pushed; `verify-packed-cli` also
-expects cli version == core version, which `-ohmy.N` intentionally breaks).
-Do not trigger it; fork releases are manual `.tgz` uploads on the GitHub
-release.
+`.github/workflows/publish.yml` is upstream's npm pipeline and is dormant on
+the fork: its `on:` block was changed to `workflow_dispatch` only, because
+upstream's triggers (`release: published`, `v*` tag push) both fire on a fork
+release. `verify-packed-cli` also expects cli version == core version, which
+`-ohmy.N` intentionally breaks. Fork releases are manual `.tgz` uploads on
+the GitHub release; re-enable the triggers when channel B (npm) ships.

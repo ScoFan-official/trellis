@@ -1,15 +1,13 @@
 name: Publish to npm
 
-# Both event sources stay wired so a published GitHub Release and a raw
-# `v*` tag push both fire a publish. The shared release-preflight script
-# makes reruns idempotent: if a package version is already on npm it is
-# skipped, so duplicate triggers do not produce duplicate publishes.
+# [oh-my] Manual dispatch only. Upstream wired `release: published` and
+# `v*` tag pushes so either event fires a publish — but the fork ships
+# GitHub release tarballs (channel A), and both events occur on every fork
+# release. Left wired, this workflow would run `check-versions` (which the
+# `-ohmy.N` suffix intentionally fails) or attempt an npm publish the fork
+# does not want yet. Re-enable when channel B ships (docs/fork-sync.md).
 on:
-  release:
-    types: [published]
-  push:
-    tags:
-      - "v*"
+  workflow_dispatch:
 
 concurrency:
   group: publish-${{ github.ref_name || github.ref }}

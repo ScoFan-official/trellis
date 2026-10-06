@@ -19,7 +19,11 @@ import { toPosix } from "./posix.js";
 export const TEMPLATE_INDEX_URL =
   "https://raw.githubusercontent.com/ScoFan-official/oh-my-trellis/main/marketplace/index.json";
 
-const TEMPLATE_REPO = "gh:ScoFan-official/oh-my-trellis/marketplace";
+// Repo ROOT, not the marketplace/ subdir: index.json `path` values are
+// repo-root-relative (`marketplace/specs/agent-workflow`) and are appended to
+// this source by `downloadWithStrategy` — the same contract the explicit
+// `-r gh:…/marketplace` flow uses (`registry.repo` + `resolved.path`).
+const TEMPLATE_REPO = "gh:ScoFan-official/oh-my-trellis";
 
 /** Map template type to installation path */
 const INSTALL_PATHS: Record<string, string> = {
