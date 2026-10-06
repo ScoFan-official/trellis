@@ -2463,6 +2463,34 @@ describe("regression: agent-session Trellis update hint", () => {
     expect(output).toContain("Trellis update available: 0.5.0 -> 0.5.9");
   });
 
+  it("[oh-my] hints when the project sits on the same upstream base without the oh-my suffix", () => {
+    // `X.Y.Z-ohmy.N` is a patched build OF `X.Y.Z` — plain semver ranks the
+    // prerelease BELOW the bare base, which would swallow the hint (and
+    // `trellis update` would call the fork CLI a "downgrade").
+    const output = runContextWithTrellisOutput("0.6.17", "0.6.17-ohmy.2");
+
+    expect(output).toContain(
+      "Trellis update available: 0.6.17 -> 0.6.17-ohmy.2",
+    );
+  });
+
+  it("[oh-my] does not offer the bare upstream base as an update to an oh-my project", () => {
+    expect(
+      runContextWithTrellisOutput("0.6.17-ohmy.2", "0.6.17"),
+    ).not.toContain("Trellis update available");
+  });
+
+  it("[oh-my] a newer oh-my build of the same base still hints", () => {
+    const output = runContextWithTrellisOutput(
+      "0.6.17-ohmy.1",
+      "0.6.17-ohmy.2",
+    );
+
+    expect(output).toContain(
+      "Trellis update available: 0.6.17-ohmy.1 -> 0.6.17-ohmy.2",
+    );
+  });
+
   it("only attempts the default text update hint once per session", () => {
     const first = runContextWithTrellisOutput("0.5.0", "0.5.9");
     const second = runContextWithTrellisOutput("0.5.0", "0.5.9");

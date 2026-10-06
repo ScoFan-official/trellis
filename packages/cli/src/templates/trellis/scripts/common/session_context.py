@@ -405,9 +405,26 @@ def _compare_prerelease(
     return (len(left) > len(right)) - (len(left) < len(right))
 
 
+_OHMY_SUFFIX_RE = re.compile(r"-ohmy\.(\d+)$")
+
+
+def _split_ohmy_suffix(version: str) -> tuple[str, int]:
+    """Split a fork build suffix: '0.6.17-ohmy.2' -> ('0.6.17', 2)."""
+    match = _OHMY_SUFFIX_RE.search(version.strip())
+    if match:
+        return version.strip()[: match.start()], int(match.group(1))
+    return version.strip(), 0
+
+
 def _compare_versions(left: str, right: str) -> int | None:
-    parsed_left = _parse_version(left)
-    parsed_right = _parse_version(right)
+    # [oh-my] `X.Y.Z-ohmy.N` is a patched build OF upstream `X.Y.Z`, so a
+    # same-base oh-my version must rank >= the bare `X.Y.Z` — plain semver
+    # would rank the prerelease lower and swallow the update hint.
+    left_base, left_ohmy = _split_ohmy_suffix(left)
+    right_base, right_ohmy = _split_ohmy_suffix(right)
+
+    parsed_left = _parse_version(left_base)
+    parsed_right = _parse_version(right_base)
     if parsed_left is None or parsed_right is None:
         return None
 
@@ -415,7 +432,10 @@ def _compare_versions(left: str, right: str) -> int | None:
     right_numbers, right_prerelease = parsed_right
     if left_numbers != right_numbers:
         return (left_numbers > right_numbers) - (left_numbers < right_numbers)
-    return _compare_prerelease(left_prerelease, right_prerelease)
+    prerelease_cmp = _compare_prerelease(left_prerelease, right_prerelease)
+    if prerelease_cmp != 0:
+        return prerelease_cmp
+    return (left_ohmy > right_ohmy) - (left_ohmy < right_ohmy)
 
 
 def _update_marker_path(repo_root: Path, context_key: str | None = None) -> Path:
