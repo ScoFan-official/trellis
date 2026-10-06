@@ -15,7 +15,7 @@ import {
 import { registerChannelCommand } from "../commands/channel/index.js";
 import { DIR_NAMES } from "../constants/paths.js";
 import { PACKAGE_NAME, VERSION } from "../constants/version.js";
-import { compareVersions } from "../utils/compare-versions.js";
+import { compareOhmyVersions } from "../utils/compare-versions.js";
 import { getConfiguredPlatforms } from "../configurators/index.js";
 import { AI_TOOLS } from "../types/ai-tools.js";
 
@@ -32,7 +32,8 @@ function checkForUpdates(cwd: string): void {
 
   const projectVersion = fs.readFileSync(versionFile, "utf-8").trim();
   const cliVersion = VERSION;
-  const comparison = compareVersions(cliVersion, projectVersion);
+  // [oh-my] fork-aware comparison: `X.Y.Z-ohmy.N` builds rank >= `X.Y.Z`.
+  const comparison = compareOhmyVersions(cliVersion, projectVersion);
 
   if (comparison > 0) {
     // CLI is newer than project - update available

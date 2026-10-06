@@ -7,10 +7,36 @@ import {
 } from "../../src/commands/upgrade.js";
 
 const TARBALL_URL =
-  "https://github.com/ScoFan-official/trellis/releases/download/v0.6.17-ohmy.2/oh-my-trellis-0.6.17-ohmy.2.tgz";
+  "https://github.com/ScoFan-official/oh-my-trellis/releases/download/cli-v0.6.17-ohmy.2/oh-my-trellis-0.6.17-ohmy.2.tgz";
 
-/** Stub fetch to answer the GitHub releases API. */
-function stubReleaseFetch(tagName = "v0.6.17-ohmy.2", withTgz = true) {
+interface StubOptions {
+  tagName?: string;
+  withTgz?: boolean;
+  /** Extra releases mixed into the list response (e.g. pack `v*` noise). */
+  extraReleases?: { tag_name: string; assets?: object[] }[];
+}
+
+/**
+ * Stub fetch to answer the GitHub releases API on
+ * `ScoFan-official/oh-my-trellis`. The list endpoint returns an ARRAY (CLI
+ * `cli-v*` releases share it with the pack's own `v*` releases); the
+ * `/releases/tags/<tag>` endpoint returns a single release object.
+ */
+function stubReleaseFetch(options: StubOptions = {}) {
+  const {
+    tagName = "cli-v0.6.17-ohmy.2",
+    withTgz = true,
+    extraReleases = [],
+  } = options;
+  const release = {
+    tag_name: tagName,
+    assets: withTgz
+      ? [
+          { name: "source.zip", browser_download_url: "https://x/z" },
+          { name: "oh-my-trellis.tgz", browser_download_url: TARBALL_URL },
+        ]
+      : [{ name: "source.zip", browser_download_url: "https://x/z" }],
+  };
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: string | URL) => {
@@ -18,15 +44,12 @@ function stubReleaseFetch(tagName = "v0.6.17-ohmy.2", withTgz = true) {
       if (!url.includes("api.github.com")) {
         return new Response("", { status: 404 });
       }
-      const release = {
-        tag_name: tagName,
-        assets: withTgz
-          ? [
-              { name: "source.zip", browser_download_url: "https://x/z" },
-              { name: "oh-my-trellis.tgz", browser_download_url: TARBALL_URL },
-            ]
-          : [{ name: "source.zip", browser_download_url: "https://x/z" }],
-      };
+      if (/\/releases$/.test(url) || url.includes("/releases?")) {
+        return new Response(
+          JSON.stringify([release, ...extraReleases]),
+          { status: 200 },
+        );
+      }
       return new Response(JSON.stringify(release), { status: 200 });
     }),
   );
@@ -44,6 +67,9 @@ describe("upgrade command", () => {
   });
 
   it("honors an explicit release tag or version", () => {
+    expect(resolveUpgradeTag("cli-v0.6.17-ohmy.1")).toBe(
+      "cli-v0.6.17-ohmy.1",
+    );
     expect(resolveUpgradeTag("v0.6.17-ohmy.1")).toBe("v0.6.17-ohmy.1");
     expect(resolveUpgradeTag("0.6.17-ohmy.2")).toBe("0.6.17-ohmy.2");
   });
@@ -54,15 +80,55 @@ describe("upgrade command", () => {
     );
   });
 
-  it("resolves the .tgz asset of the latest release", async () => {
-    stubReleaseFetch();
+  it("resolves the .tgz asset of the latest cli-v* release", async () => {
+    stubReleaseFetch({
+      extraReleases: [
+        // Pack release on the same list — must be ignored.
+        { tag_name: "v1.0.0", assets: [] },
+        // Older CLI release — must not win.
+        {
+          tag_name: "cli-v0.6.17-ohmy.1",
+          assets: [
+            {
+              name: "old.tgz",
+              browser_download_url: "https://x/old.tgz",
+            },
+          ],
+        },
+      ],
+    });
     const release = await resolveReleaseTarball("latest");
     expect(release.tarballUrl).toBe(TARBALL_URL);
-    expect(release.tagName).toBe("v0.6.17-ohmy.2");
+    expect(release.tagName).toBe("cli-v0.6.17-ohmy.2");
+  });
+
+  it("lists releases for latest — never the /latest shortcut (pack releases share the page)", async () => {
+    stubReleaseFetch();
+    const fetchMock = vi.mocked(fetch);
+    await resolveReleaseTarball("latest");
+    const urls = fetchMock.mock.calls.map((c) => String(c[0]));
+    expect(urls.some((u) => u.endsWith("/releases/latest"))).toBe(false);
+    expect(
+      urls.some((u) =>
+        u.startsWith(
+          "https://api.github.com/repos/ScoFan-official/oh-my-trellis/releases",
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  it("normalizes a bare or v-prefixed version to the cli-v* tag endpoint", async () => {
+    stubReleaseFetch();
+    const fetchMock = vi.mocked(fetch);
+    await resolveReleaseTarball("0.6.17-ohmy.2");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.github.com/repos/ScoFan-official/oh-my-trellis/releases/tags/cli-v0.6.17-ohmy.2",
+      expect.anything(),
+    );
   });
 
   it("fails when the release has no tarball asset", async () => {
-    stubReleaseFetch("v9.9.9", false);
+    stubReleaseFetch({ tagName: "cli-v9.9.9", withTgz: false });
     await expect(resolveReleaseTarball("latest")).rejects.toThrow(
       /no \.tgz asset/,
     );
@@ -70,28 +136,28 @@ describe("upgrade command", () => {
 
   it("builds POSIX npm global install command without shell", () => {
     expect(
-      buildUpgradeCommand(TARBALL_URL, "v0.6.17-ohmy.2", "darwin"),
+      buildUpgradeCommand(TARBALL_URL, "cli-v0.6.17-ohmy.2", "darwin"),
     ).toMatchObject({
       command: "npm",
       args: ["install", "-g", TARBALL_URL],
       spawnOptions: { stdio: "inherit", shell: false },
       displayCommand: `npm install -g ${TARBALL_URL}`,
       target: TARBALL_URL,
-      tag: "v0.6.17-ohmy.2",
+      tag: "cli-v0.6.17-ohmy.2",
       binaryCheckCommand: "which trellis",
     });
   });
 
   it("builds Windows command through cmd.exe", () => {
     expect(
-      buildUpgradeCommand(TARBALL_URL, "v0.6.17-ohmy.2", "win32"),
+      buildUpgradeCommand(TARBALL_URL, "cli-v0.6.17-ohmy.2", "win32"),
     ).toMatchObject({
       command: "cmd.exe",
       args: ["/d", "/s", "/c", `npm install -g ${TARBALL_URL}`],
       spawnOptions: { stdio: "inherit", shell: false },
       displayCommand: `npm install -g ${TARBALL_URL}`,
       target: TARBALL_URL,
-      tag: "v0.6.17-ohmy.2",
+      tag: "cli-v0.6.17-ohmy.2",
       binaryCheckCommand: "where trellis",
     });
   });

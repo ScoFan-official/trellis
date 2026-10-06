@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { compareVersions } from "../../src/utils/compare-versions.js";
+import {
+  compareOhmyVersions,
+  compareVersions,
+} from "../../src/utils/compare-versions.js";
 
 // =============================================================================
 // Base version comparison (no prerelease)
@@ -163,5 +166,50 @@ describe("compareVersions: as Array.prototype.sort comparator", () => {
       "0.5.0-rc.10",
       "0.5.0",
     ]);
+  });
+});
+
+// =============================================================================
+// oh-my versioning — `X.Y.Z-ohmy.N` is a patched build OF `X.Y.Z`
+// =============================================================================
+
+describe("compareOhmyVersions: oh-my builds vs upstream base", () => {
+  // Fork versions are `<upstream>-ohmy.<N>`: semver-prerelease-shaped, but the
+  // suffix is our patch counter on top of the upstream base — NOT a
+  // pre-release of it. Plain compareVersions ranks `0.6.17-ohmy.1` *below*
+  // `0.6.17`, which made the CLI report itself older than a project stamped
+  // by an upstream build. compareOhmyVersions compares upstream base first,
+  // then the oh-my counter (absent = 0).
+
+  it("ranks same-base X.Y.Z-ohmy.N above bare X.Y.Z", () => {
+    expect(compareOhmyVersions("0.6.17-ohmy.1", "0.6.17")).toBe(1);
+    expect(compareOhmyVersions("0.6.17", "0.6.17-ohmy.1")).toBe(-1);
+  });
+
+  it("orders oh-my counters numerically on the same base", () => {
+    expect(compareOhmyVersions("0.6.17-ohmy.1", "0.6.17-ohmy.2")).toBe(-1);
+    expect(compareOhmyVersions("0.6.17-ohmy.2", "0.6.17-ohmy.1")).toBe(1);
+    expect(compareOhmyVersions("0.6.17-ohmy.2", "0.6.17-ohmy.10")).toBe(-1);
+  });
+
+  it("treats identical oh-my versions as equal", () => {
+    expect(compareOhmyVersions("0.6.17-ohmy.2", "0.6.17-ohmy.2")).toBe(0);
+  });
+
+  it("upstream base wins over the oh-my counter", () => {
+    // A newer upstream base outranks any counter on the old base.
+    expect(compareOhmyVersions("0.6.18-ohmy.1", "0.6.17-ohmy.9")).toBe(1);
+    expect(compareOhmyVersions("0.6.17-ohmy.9", "0.6.18")).toBe(-1);
+  });
+
+  it("tolerates a leading v on either side", () => {
+    expect(compareOhmyVersions("v0.6.17-ohmy.2", "0.6.17-ohmy.2")).toBe(0);
+    expect(compareOhmyVersions("v0.6.17", "0.6.17-ohmy.1")).toBe(-1);
+  });
+
+  it("falls back to semver behaviour when neither side is an oh-my build", () => {
+    expect(compareOhmyVersions("0.5.0", "0.5.0-rc.1")).toBe(1);
+    expect(compareOhmyVersions("0.5.0-rc.1", "0.5.0")).toBe(-1);
+    expect(compareOhmyVersions("1.0.0-alpha", "1.0.0-beta")).toBe(-1);
   });
 });

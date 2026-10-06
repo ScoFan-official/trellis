@@ -81,3 +81,31 @@ export function compareVersions(a: string, b: string): number {
 
   return 0;
 }
+
+/**
+ * [oh-my] Compare fork-aware versions of the form `X.Y.Z-ohmy.N`.
+ *
+ * The `-ohmy.N` suffix is the fork's patch counter ON TOP of the upstream
+ * base — not a pre-release of it. Plain semver ranks `0.6.17-ohmy.1` below
+ * `0.6.17`, which made a fork CLI report itself older than a project stamped
+ * by an upstream build. This comparator compares the upstream base first
+ * (full semver rules), then the oh-my counter (absent = 0). Non-oh-my
+ * versions fall back to {@link compareVersions} behaviour.
+ */
+const OHMY_SUFFIX_RE = /-ohmy\.(\d+)$/;
+
+export function compareOhmyVersions(a: string, b: string): number {
+  const splitOhmy = (v: string): [string, number] => {
+    const normalized = v.replace(/^v/, "");
+    const match = OHMY_SUFFIX_RE.exec(normalized);
+    if (!match) return [normalized, 0];
+    return [normalized.slice(0, match.index), parseInt(match[1], 10)];
+  };
+  const [aBase, aOhmy] = splitOhmy(a);
+  const [bBase, bOhmy] = splitOhmy(b);
+
+  const baseComparison = compareVersions(aBase, bBase);
+  if (baseComparison !== 0) return baseComparison;
+  if (aOhmy !== bOhmy) return aOhmy < bOhmy ? -1 : 1;
+  return 0;
+}

@@ -31,7 +31,14 @@ import {
   computeHash,
   shouldExcludeFromHash,
 } from "../utils/template-hash.js";
-import { compareVersions } from "../utils/compare-versions.js";
+import { compareOhmyVersions } from "../utils/compare-versions.js";
+import {
+  GITHUB_RELEASES_HEADERS,
+  RELEASES_API,
+  cliReleaseVersion,
+  pickLatestCliRelease,
+  type GithubReleasePayload,
+} from "../utils/github-releases.js";
 import { toPosix } from "../utils/posix.js";
 import { setupProxy } from "../utils/proxy.js";
 import { emptyTaskJson } from "../utils/task-json.js";
@@ -1372,28 +1379,27 @@ function getInstalledVersion(cwd: string): string {
 }
 
 /**
- * [oh-my] Fetch the latest released version from GitHub.
+ * [oh-my] Fetch the latest released CLI version from GitHub.
  *
  * The fork (`oh-my-trellis`) ships as GitHub release tarballs on
- * `ScoFan-official/trellis`, not on npm — the npm registry lookup upstream
- * used is replaced by the releases API. `tag_name` may carry a leading `v`.
+ * `ScoFan-official/oh-my-trellis` under `cli-v*` tags, not on npm — the npm
+ * registry lookup upstream used is replaced by the releases API. The list
+ * endpoint is required (not `/latest`): the pack's own `vX.Y.Z` releases
+ * share it. Returns the bare version (`0.6.17-ohmy.N`, no tag prefix).
  */
 async function getLatestReleaseVersion(): Promise<string | null> {
   try {
-    const response = await fetch(
-      "https://api.github.com/repos/ScoFan-official/trellis/releases/latest",
-      {
-        headers: {
-          Accept: "application/vnd.github+json",
-          "User-Agent": "oh-my-trellis",
-        },
-      },
-    );
+    const response = await fetch(RELEASES_API, {
+      headers: GITHUB_RELEASES_HEADERS,
+    });
     if (!response.ok) {
       return null;
     }
-    const data = (await response.json()) as { tag_name?: string };
-    return data.tag_name?.replace(/^v/, "") ?? null;
+    const releases = (await response.json()) as GithubReleasePayload[];
+    const latest = pickLatestCliRelease(
+      Array.isArray(releases) ? releases : [],
+    );
+    return latest?.tag_name ? cliReleaseVersion(latest.tag_name) : null;
   } catch {
     return null;
   }
@@ -2128,10 +2134,11 @@ export async function update(options: UpdateOptions): Promise<void> {
   const cliVersion = VERSION;
   const latestReleaseVersion = await getLatestReleaseVersion();
 
-  // Version comparison
-  const cliVsProject = compareVersions(cliVersion, projectVersion);
+  // Version comparison — [oh-my] fork-aware: same-base `X.Y.Z-ohmy.N`
+  // counts as a patch on `X.Y.Z`, not a pre-release below it.
+  const cliVsProject = compareOhmyVersions(cliVersion, projectVersion);
   const cliVsRelease = latestReleaseVersion
-    ? compareVersions(cliVersion, latestReleaseVersion)
+    ? compareOhmyVersions(cliVersion, latestReleaseVersion)
     : 0;
 
   // Display versions with context

@@ -1,16 +1,22 @@
 import { spawnSync } from "node:child_process";
 import chalk from "chalk";
 import { VERSION } from "../constants/version.js";
+import {
+  GITHUB_RELEASES_HEADERS,
+  RELEASES_API,
+  RELEASES_REPO,
+  pickLatestCliRelease,
+  toCliReleaseTag,
+  type GithubReleasePayload,
+} from "../utils/github-releases.js";
 
 /**
- * [oh-my] Fork releases ship as GitHub release tarballs on
- * `ScoFan-official/trellis` (channel A), not on npm. `trellis upgrade`
- * resolves the requested release tag to its `.tgz` asset and installs it with
- * `npm install -g <url>` — the same mechanism the devin `oh-my-update`
- * workflow uses.
+ * [oh-my] CLI releases ship as GitHub release tarballs on
+ * `ScoFan-official/oh-my-trellis` under `cli-v*` tags (channel A), not on
+ * npm. `trellis upgrade` resolves the requested release tag to its `.tgz`
+ * asset and installs it with `npm install -g <url>` — the same mechanism the
+ * devin `oh-my-update` workflow uses.
  */
-const RELEASES_REPO = "ScoFan-official/trellis";
-const RELEASES_API = `https://api.github.com/repos/${RELEASES_REPO}/releases`;
 
 export interface UpgradeOptions {
   tag?: string;
@@ -48,8 +54,8 @@ const RELEASE_TAG_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 /**
  * Resolve the GitHub release tag to install. `latest` (the default) resolves
- * to the repo's most recent release; anything else must look like a release
- * tag or version (`0.6.17-ohmy.2`, `v0.6.17-ohmy.2`).
+ * to the newest `cli-v*` release; anything else must look like a release tag
+ * or version (`0.6.17-ohmy.2`, `v0.6.17-ohmy.2`, `cli-v0.6.17-ohmy.2`).
  */
 export function resolveUpgradeTag(requestedTag?: string): string {
   if (!requestedTag || requestedTag === "latest") {
@@ -57,7 +63,7 @@ export function resolveUpgradeTag(requestedTag?: string): string {
   }
   if (!RELEASE_TAG_RE.test(requestedTag)) {
     throw new Error(
-      `Invalid release tag/version "${requestedTag}". Use 'latest' or a release tag such as v0.6.17-ohmy.1.`,
+      `Invalid release tag/version "${requestedTag}". Use 'latest' or a release tag such as cli-v0.6.17-ohmy.1.`,
     );
   }
   return requestedTag;
@@ -69,34 +75,40 @@ interface ReleaseAssetResolution {
   tagName: string;
 }
 
-interface GithubReleasePayload {
-  tag_name?: string;
-  assets?: { name?: string; browser_download_url?: string }[];
-}
-
 async function fetchReleasePayload(tag: string): Promise<GithubReleasePayload> {
-  const url =
-    tag === "latest"
-      ? `${RELEASES_API}/latest`
-      : `${RELEASES_API}/tags/${encodeURIComponent(tag)}`;
-  const response = await fetch(url, {
-    headers: {
-      Accept: "application/vnd.github+json",
-      "User-Agent": "oh-my-trellis",
+  if (tag === "latest") {
+    // `/releases/latest` cannot be used: the pack's own `vX.Y.Z` releases
+    // share the same list endpoint. List and pick the newest `cli-v*` tag.
+    const response = await fetch(RELEASES_API, {
+      headers: GITHUB_RELEASES_HEADERS,
+    });
+    if (!response.ok) {
+      throw new Error(
+        `Could not list releases on github.com/${RELEASES_REPO} (HTTP ${response.status}).`,
+      );
+    }
+    const releases = (await response.json()) as GithubReleasePayload[];
+    const latest = pickLatestCliRelease(Array.isArray(releases) ? releases : []);
+    if (!latest) {
+      throw new Error(
+        `No cli-v* release found on github.com/${RELEASES_REPO}.`,
+      );
+    }
+    return latest;
+  }
+
+  const releaseTag = toCliReleaseTag(tag);
+  const response = await fetch(
+    `${RELEASES_API}/tags/${encodeURIComponent(releaseTag)}`,
+    {
+      headers: GITHUB_RELEASES_HEADERS,
     },
-  });
+  );
   if (response.ok) {
     return (await response.json()) as GithubReleasePayload;
   }
-  // If a bare version was given, retry with the conventional `v` prefix
-  // (and vice versa) so `--tag 0.6.17-ohmy.1` and `--tag v0.6.17-ohmy.1`
-  // both work.
-  if (response.status === 404 && tag !== "latest") {
-    const alternate = tag.startsWith("v") ? tag.slice(1) : `v${tag}`;
-    return fetchReleasePayload(alternate);
-  }
   throw new Error(
-    `Could not resolve release "${tag}" on github.com/${RELEASES_REPO} (HTTP ${response.status}).`,
+    `Could not resolve release "${releaseTag}" on github.com/${RELEASES_REPO} (HTTP ${response.status}).`,
   );
 }
 

@@ -183,12 +183,15 @@ describe("update() integration", () => {
     const noop = () => {};
     vi.spyOn(console, "log").mockImplementation(noop);
     vi.spyOn(console, "error").mockImplementation(noop);
-    // Mock fetch for npm registry
+    // Mock fetch for the GitHub releases list on ScoFan-official/oh-my-trellis
+    // (the version check lists `cli-v*` releases; answering with the current
+    // version means "already up to date").
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue({
         ok: true,
-        json: () => Promise.resolve({ version: VERSION }),
+        json: () =>
+          Promise.resolve([{ tag_name: `cli-v${VERSION}`, assets: [] }]),
       }),
     );
   });
@@ -794,6 +797,21 @@ describe("update() integration", () => {
     expect(fs.readFileSync(versionPath, "utf-8")).toBe("99.99.99");
   });
 
+  it("#10b same-base -ohmy.N CLI is not a downgrade of an upstream-stamped project", async () => {
+    await setupProject();
+
+    // [oh-my] Regression: a project stamped `0.6.17` by an upstream build,
+    // updated by CLI `0.6.17-ohmy.N`, was wrongly blocked as a DOWNGRADE
+    // (semver ranks the prerelease below its base).
+    const upstreamBase = VERSION.replace(/-ohmy\.\d+$/, "");
+    if (upstreamBase === VERSION) return; // meaningful only on -ohmy.N builds
+    fs.writeFileSync(versionFilePath(), upstreamBase);
+
+    await update({});
+
+    expect(fs.readFileSync(versionFilePath(), "utf-8")).toBe(VERSION);
+  });
+
   it("#11 allowDowngrade permits update when CLI is older", async () => {
     await setupProject();
 
@@ -956,10 +974,11 @@ describe("update() integration", () => {
       "fetch",
       vi.fn().mockImplementation((input: string | URL) => {
         const url = String(input);
-        if (url.includes("registry.npmjs.org")) {
+        if (url.includes("api.github.com")) {
           return Promise.resolve({
             ok: true,
-            json: () => Promise.resolve({ version: VERSION }),
+            json: () =>
+              Promise.resolve([{ tag_name: `cli-v${VERSION}`, assets: [] }]),
           });
         }
         return Promise.resolve({ status: 404, ok: false });
@@ -995,10 +1014,11 @@ describe("update() integration", () => {
       "fetch",
       vi.fn().mockImplementation((input: string | URL) => {
         const url = String(input);
-        if (url.includes("registry.npmjs.org")) {
+        if (url.includes("api.github.com")) {
           return Promise.resolve({
             ok: true,
-            json: () => Promise.resolve({ version: VERSION }),
+            json: () =>
+              Promise.resolve([{ tag_name: `cli-v${VERSION}`, assets: [] }]),
           });
         }
         return Promise.resolve({ status: 404, ok: false });
@@ -1042,10 +1062,11 @@ describe("update() integration", () => {
       "fetch",
       vi.fn().mockImplementation((input: string | URL) => {
         const url = String(input);
-        if (url.includes("registry.npmjs.org")) {
+        if (url.includes("api.github.com")) {
           return Promise.resolve({
             ok: true,
-            json: () => Promise.resolve({ version: VERSION }),
+            json: () =>
+              Promise.resolve([{ tag_name: `cli-v${VERSION}`, assets: [] }]),
           });
         }
         return Promise.resolve({
