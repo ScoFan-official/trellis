@@ -238,7 +238,7 @@ def _restore_child_links(unlinked: dict[Path, str | None]) -> None:
 # Keep in sync with src/types/ai-tools.ts AI_TOOLS entries — these are the
 # platforms listed in workflow.md's "agent-capable" Skill Routing block.
 # Codex is checked separately because explicit inline mode does not consume
-# JSONL. Kilo / Antigravity / Devin are NOT in this list either: they load
+# JSONL. Kilo / Antigravity are NOT in this list either: they load
 # specs through skills instead of JSONL.
 _SUBAGENT_CONFIG_DIRS: tuple[str, ...] = (
     ".claude",
@@ -256,6 +256,7 @@ _SUBAGENT_CONFIG_DIRS: tuple[str, ...] = (
     ".zcode",     # ZCode
     ".grok",      # Grok Build
     ".kimi-code", # Kimi Code
+    ".devin",     # Devin — dispatches run_subagent per workflow.md [Devin] blocks
 )
 _CODEX_CONFIG_DIR = ".codex"
 
@@ -580,7 +581,7 @@ def cmd_create(args: argparse.Namespace) -> int:
     # planning — a placeholder row would read as unresolved scaffolding to
     # `task.py validate` and to PR preflight, so the curation instructions go
     # to the console below instead of into the files. Agent-less platforms
-    # (Kilo / Antigravity / Devin) skip this — they load specs via the
+    # (Kilo / Antigravity) skip this — they load specs via the
     # trellis-before-dev skill instead of JSONL.
     created_jsonl = False
     if _has_subagent_platform(repo_root):

@@ -124,7 +124,7 @@
     ".agents/skills/trellis-start/SKILL.md": "79a5ba7a2aff3c72e06d7f4cd6942dc4f4f4092dd40f9c8e94f1838024a81e4d",
     ".trellis/scripts/common/safe_commit.py": "baa5c82324eb62154374ec63394ecdc8609bb37d93892e3bcb88f452bb7d6446",
     ".trellis/scripts/common/config.py": "25c5a53ad20d6909be5209222e4208a84528805316a4d78350529459a364edb1",
-    ".trellis/scripts/common/task_store.py": "789c090c2d5103bf790e8bfb0989a8ff486c7d370cbe03d3eefb1c239d02624a",
+    ".trellis/scripts/common/task_store.py": "ca9b9a16870e570eb734f31fafd3df1e992e131539af1e7183022e53dd1c2294",
     ".trellis/scripts/common/session_context.py": "df79c44efe3432811c32d145d57a66343a70e221ec087ed2bd28b76677bb4076",
     ".trellis/scripts/add_session.py": "7fcacb29ffd13599949a517aa967d868040eb4c9b40356b0c460a32361237eb6",
     ".claude/commands/trellis/continue.md": "6c34c41824f8eff4b2df792e032e0c36787b59f8a8879b0338347073f76ad52c",
