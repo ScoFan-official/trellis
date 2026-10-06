@@ -106,8 +106,11 @@ Answer these questions:
 | **New Pattern** | A reusable approach discovered | Add to "Patterns" section |
 | **Forbidden Pattern** | Something that causes problems | Add to "Anti-patterns" or "Don't" section |
 | **Common Mistake** | Easy-to-make error | Add to "Common Mistakes" section |
+| **Recurring Mechanical Mistake** | A mechanical error caught repeatedly (across check passes or sessions) | Propose a **deterministic guardrail** first — lint rule, hook, CI check, pre-commit gate. Spec text is the fallback when a tool can't evaluate it |
 | **Convention** | Agreed-upon standard | Add to relevant section |
 | **Gotcha** | Non-obvious behavior | Add warning callout |
+
+**Deterministic guardrail first**: every written convention is a line an agent must remember; every automated check is one it cannot violate. When the lesson is mechanical and recurring, prefer making the mistake impossible over documenting it.
 
 ### Step 3: Read the Target Code-Spec
 

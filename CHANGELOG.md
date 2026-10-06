@@ -2,6 +2,13 @@
 
 Versions are `UPSTREAM_BASE-ohmy.N`: the suffix increments for our changes on a given upstream base; syncing to a new upstream release resets `-ohmy.N` to `-ohmy.1`.
 
+## 0.6.17-ohmy.4
+
+- `update-spec` template: "Recurring Mechanical Mistake" now prefers a
+  deterministic guardrail (lint rule / hook / CI check) over spec text —
+  mp `retro` discipline: mistakes a tool can catch should be made
+  impossible, not just documented.
+
 ## 0.6.17-ohmy.3
 
 Parallel dual-axis check — Phase 2.2 now runs `trellis-check` as two
