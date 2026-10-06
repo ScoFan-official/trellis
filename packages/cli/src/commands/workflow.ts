@@ -3,11 +3,11 @@
  *
  * Behavior contracts:
  *
- * - Hash boundary: after writing native content, refresh the
- *   `.trellis/workflow.md` entry in `.template-hashes.json`. After writing
- *   any non-native content, remove that entry. This prevents `trellis update`
- *   from silently restoring native bytes over a user-selected variant
- *   (see design.md "Durable-state contract").
+ * - Hash boundary: after writing managed bundled (`oh-my`) content, refresh
+ *   the `.trellis/workflow.md` entry in `.template-hashes.json`. After writing
+ *   any non-managed content (including `native`), remove that entry. This
+ *   prevents `trellis update` from silently restoring bundled bytes over a
+ *   user-selected variant (see design.md "Durable-state contract").
  *
  * - Modified-file protection: if the on-disk workflow has been edited (hash
  *   mismatch and it isn't already byte-identical to the chosen template),
@@ -35,7 +35,7 @@ import {
 import {
   listWorkflowTemplates,
   resolveWorkflowTemplate,
-  NATIVE_WORKFLOW_ID,
+  OH_MY_WORKFLOW_ID,
   WorkflowResolveError,
   type ResolvedWorkflowTemplate,
   type WorkflowTemplateListing,
@@ -143,16 +143,19 @@ async function confirmOverwriteInteractively(): Promise<
 
 function applyHashContract(cwd: string, templateId: string): void {
   const relPath = PATHS.WORKFLOW_GUIDE_FILE;
-  if (templateId === NATIVE_WORKFLOW_ID) {
+  // [oh-my] `oh-my` is the managed bundled workflow in this fork (the role
+  // `native` plays upstream): its hash stays tracked so `trellis update`
+  // refreshes it. `native` and marketplace ids are user-managed.
+  if (templateId === OH_MY_WORKFLOW_ID) {
     const filePath = workflowFilePath(cwd);
     const current = fs.readFileSync(filePath, "utf-8");
     const files = new Map<string, string>();
     files.set(relPath, current);
     updateHashes(cwd, files);
   } else {
-    // Non-native workflow is user-managed local content. Drop the hash entry
+    // Non-managed workflow is user-managed local content. Drop the hash entry
     // so `trellis update` treats it as modified and does not silently restore
-    // native bytes.
+    // bundled bytes.
     removeHash(cwd, relPath);
   }
 }

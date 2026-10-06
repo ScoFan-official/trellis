@@ -38,7 +38,8 @@ import {
 } from "../utils/project-detector.js";
 import { initializeHashes, removeHash } from "../utils/template-hash.js";
 import {
-  NATIVE_WORKFLOW_ID,
+  DEFAULT_WORKFLOW_ID,
+  OH_MY_WORKFLOW_ID,
   resolveWorkflowTemplate,
 } from "../utils/workflow-resolver.js";
 import {
@@ -1884,16 +1885,18 @@ export async function init(options: InitOptions): Promise<void> {
   // ==========================================================================
 
   const workflowIdInput = options.workflow?.trim();
+  // [oh-my] Fork default is the bundled `oh-my` workflow (Laber's Devin
+  // dispatch variant); upstream's `native` remains selectable via --workflow.
   const workflowId =
     workflowIdInput && workflowIdInput.length > 0
       ? workflowIdInput
-      : NATIVE_WORKFLOW_ID;
+      : DEFAULT_WORKFLOW_ID;
   let workflowMdOverride: string | undefined;
-  if (workflowId !== NATIVE_WORKFLOW_ID || options.workflowSource) {
+  if (workflowId !== OH_MY_WORKFLOW_ID || options.workflowSource) {
     const resolved = await resolveWorkflowTemplate(workflowId, {
       source: options.workflowSource,
     });
-    if (resolved.id !== NATIVE_WORKFLOW_ID) {
+    if (resolved.id !== OH_MY_WORKFLOW_ID) {
       workflowMdOverride = resolved.content;
       console.log(
         chalk.blue(`🧭 Using workflow template: ${chalk.cyan(resolved.id)}`),
@@ -1986,11 +1989,11 @@ export async function init(options: InitOptions): Promise<void> {
     );
   }
 
-  // Non-native workflow is user-managed local content. Drop the
+  // Non-managed workflow is user-managed local content. Drop the
   // `.trellis/workflow.md` hash entry so `trellis update` classifies it as
-  // modified and does not silently restore native bytes. See design.md
+  // modified and does not silently restore bundled bytes. See design.md
   // "Durable-state contract".
-  if (workflowMdOverride !== undefined && workflowId !== NATIVE_WORKFLOW_ID) {
+  if (workflowMdOverride !== undefined && workflowId !== OH_MY_WORKFLOW_ID) {
     removeHash(cwd, PATHS.WORKFLOW_GUIDE_FILE);
   }
 

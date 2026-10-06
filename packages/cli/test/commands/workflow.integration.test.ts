@@ -1,12 +1,15 @@
 /**
  * Integration tests for `trellis workflow` and the init/update hash boundary
- * for non-native workflow selection.
+ * for non-oh-my workflow selection.
  *
  * Coverage:
- * - `trellis workflow --template native`: writes bundled content, keeps hash.
+ * - `trellis init` (default): writes bundled oh-my content, keeps hash.
+ * - `trellis init --workflow native`: writes bundled native content, removes
+ *   hash (native is user-managed in the oh-my fork).
+ * - `trellis workflow --template oh-my`: writes bundled content, keeps hash.
  * - `trellis workflow --template tdd`: writes marketplace content, removes hash.
  * - `trellis init --workflow tdd`: marketplace content is written, hash removed.
- * - `trellis update` after switch to tdd does NOT silently restore native.
+ * - `trellis update` after switch to tdd does NOT silently restore oh-my.
  * - Non-interactive modified workflow.md fails without --force / --create-new.
  * - `--create-new` writes `.new` and leaves workflow.md + hash untouched.
  */
@@ -36,7 +39,10 @@ import { update } from "../../src/commands/update.js";
 import { runWorkflowCommand, WorkflowCommandError } from "../../src/commands/workflow.js";
 import { PATHS } from "../../src/constants/paths.js";
 import { loadHashes } from "../../src/utils/template-hash.js";
-import { workflowMdTemplate } from "../../src/templates/trellis/index.js";
+import {
+  ohMyWorkflowMdTemplate,
+  workflowMdTemplate,
+} from "../../src/templates/trellis/index.js";
 import { replacePythonCommandLiterals } from "../../src/configurators/shared.js";
 
 // eslint-disable-next-line @typescript-eslint/no-empty-function
@@ -99,17 +105,32 @@ describe("trellis workflow integration", () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it("init --workflow native keeps workflow.md hash-tracked", async () => {
+  it("init default writes the bundled oh-my workflow and keeps workflow.md hash-tracked", async () => {
     stubMarketplaceFetch();
     await init({ yes: true });
 
     const wfPath = path.join(tmpDir, PATHS.WORKFLOW_GUIDE_FILE);
     expect(fs.existsSync(wfPath)).toBe(true);
     expect(fs.readFileSync(wfPath, "utf-8")).toBe(
-      replacePythonCommandLiterals(workflowMdTemplate),
+      replacePythonCommandLiterals(ohMyWorkflowMdTemplate),
     );
     const hashes = loadHashes(tmpDir);
     expect(hashes[PATHS.WORKFLOW_GUIDE_FILE]).toBeTruthy();
+  });
+
+  it("init --workflow native writes upstream native content as user-managed", async () => {
+    stubMarketplaceFetch();
+    await init({ yes: true, workflow: "native" } as Record<string, unknown>);
+
+    const wfPath = path.join(tmpDir, PATHS.WORKFLOW_GUIDE_FILE);
+    expect(fs.existsSync(wfPath)).toBe(true);
+    expect(fs.readFileSync(wfPath, "utf-8")).toBe(
+      replacePythonCommandLiterals(workflowMdTemplate),
+    );
+    // [oh-my] Only the fork's `oh-my` default is managed by `trellis update`;
+    // explicit `native` is an opt-out (user-managed → no hash entry).
+    const hashes = loadHashes(tmpDir);
+    expect(hashes[PATHS.WORKFLOW_GUIDE_FILE]).toBeUndefined();
   });
 
   it("init --workflow tdd writes marketplace content and removes the hash entry", async () => {
@@ -172,24 +193,39 @@ describe("trellis workflow integration", () => {
     ).rejects.toThrow(/workflow template/i);
   });
 
-  it("trellis workflow --template native refreshes hash after switching from tdd", async () => {
+  it("trellis workflow --template oh-my refreshes hash after switching from tdd", async () => {
     stubMarketplaceFetch();
     await init({ yes: true, workflow: "tdd" } as Record<string, unknown>);
     expect(
       loadHashes(tmpDir)[PATHS.WORKFLOW_GUIDE_FILE],
     ).toBeUndefined();
 
-    // Switching FROM a non-native workflow requires --force because the file
+    // Switching FROM a marketplace workflow requires --force because the file
     // has no stored hash → the resolver conservatively flags it as "modified",
     // and non-interactive mode must not silently overwrite user content.
-    await runWorkflowCommand({ template: "native", force: true });
+    await runWorkflowCommand({ template: "oh-my", force: true });
+
+    const wfPath = path.join(tmpDir, PATHS.WORKFLOW_GUIDE_FILE);
+    expect(fs.readFileSync(wfPath, "utf-8")).toBe(
+      replacePythonCommandLiterals(ohMyWorkflowMdTemplate),
+    );
+    // Switching back to the bundled oh-my re-tracks the hash so update() can
+    // manage it.
+    expect(loadHashes(tmpDir)[PATHS.WORKFLOW_GUIDE_FILE]).toBeTruthy();
+  });
+
+  it("trellis workflow --template native stays user-managed", async () => {
+    stubMarketplaceFetch();
+    await init({ yes: true });
+    expect(loadHashes(tmpDir)[PATHS.WORKFLOW_GUIDE_FILE]).toBeTruthy();
+
+    await runWorkflowCommand({ template: "native" });
 
     const wfPath = path.join(tmpDir, PATHS.WORKFLOW_GUIDE_FILE);
     expect(fs.readFileSync(wfPath, "utf-8")).toBe(
       replacePythonCommandLiterals(workflowMdTemplate),
     );
-    // Switching back to native re-tracks the hash so update() can manage it.
-    expect(loadHashes(tmpDir)[PATHS.WORKFLOW_GUIDE_FILE]).toBeTruthy();
+    expect(loadHashes(tmpDir)[PATHS.WORKFLOW_GUIDE_FILE]).toBeUndefined();
   });
 
   it("trellis workflow --template tdd writes marketplace content and removes the hash", async () => {
@@ -281,7 +317,7 @@ describe("trellis workflow integration", () => {
     expect(loadHashes(tmpDir)[PATHS.WORKFLOW_GUIDE_FILE]).toBe(originalHash);
   });
 
-  it("trellis update after switching to tdd does not silently restore native workflow", async () => {
+  it("trellis update after switching to tdd does not silently restore oh-my workflow", async () => {
     stubMarketplaceFetch();
     await init({ yes: true });
     await runWorkflowCommand({ template: "tdd" });
@@ -296,7 +332,7 @@ describe("trellis workflow integration", () => {
     const afterUpdate = fs.readFileSync(wfPath, "utf-8");
     expect(afterUpdate).toBe(beforeUpdate);
     expect(afterUpdate).not.toBe(
-      replacePythonCommandLiterals(workflowMdTemplate),
+      replacePythonCommandLiterals(ohMyWorkflowMdTemplate),
     );
   });
 });

@@ -6,7 +6,7 @@ import { copyTrellisDir } from "../templates/extract.js";
 
 // Import trellis templates (generic, not project-specific)
 import {
-  workflowMdTemplate,
+  ohMyWorkflowMdTemplate,
   configYamlTemplate,
   gitignoreTemplate,
   gitattributesTemplate,
@@ -64,10 +64,11 @@ export interface WorkflowOptions {
   remoteSpecPackages?: Set<string>;
   /**
    * Optional override for `.trellis/workflow.md` content. When omitted the
-   * bundled native template is written. Set by `init --workflow` (or
-   * `--workflow-source`) after the resolver has fetched marketplace content.
-   * Caller is still responsible for removing the `.trellis/workflow.md` hash
-   * entry for non-native workflows so update.ts treats them as user-managed.
+   * bundled `oh-my` template (the fork's managed default) is written. Set by
+   * `init --workflow` (or `--workflow-source`) after the resolver has fetched
+   * the selected content. Caller is still responsible for removing the
+   * `.trellis/workflow.md` hash entry for non-managed workflows so update.ts
+   * treats them as user-managed.
    */
   workflowMdOverride?: string;
 }
@@ -130,7 +131,9 @@ export async function createWorkflowStructure(
   const skipSpecTemplates = options?.skipSpecTemplates ?? false;
   const packages = options?.packages;
   const remoteSpecPackages = options?.remoteSpecPackages;
-  const workflowMd = options?.workflowMdOverride ?? workflowMdTemplate;
+  // [oh-my] Default workflow.md is the bundled `oh-my` template (fork's
+  // managed default); `workflowMdOverride` carries any other selection.
+  const workflowMd = options?.workflowMdOverride ?? ohMyWorkflowMdTemplate;
 
   // Create base .trellis directory
   ensureDir(path.join(cwd, DIR_NAMES.WORKFLOW));
@@ -170,7 +173,13 @@ export async function createWorkflowStructure(
   // --template`.
   ensureDir(path.join(cwd, PATHS.AGENTS));
   for (const [agentFile, content] of getAllAgents()) {
-    await writeFile(path.join(cwd, PATHS.AGENTS, agentFile), content);
+    // Rendered write: `trellis update` treats the rendered bytes as canonical,
+    // so init must write the same bytes or the first update flags a spurious
+    // change (upstream cards contain no `python3` literals; the oh-my cards do).
+    await writeFile(
+      path.join(cwd, PATHS.AGENTS, agentFile),
+      replacePythonCommandLiterals(content),
+    );
   }
 
   // Create workspace/ with index.md

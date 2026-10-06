@@ -9,23 +9,37 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   NATIVE_WORKFLOW_ID,
+  OH_MY_WORKFLOW_ID,
   WorkflowResolveError,
   listWorkflowTemplates,
   resolveWorkflowTemplate,
 } from "../../src/utils/workflow-resolver.js";
-import { workflowMdTemplate } from "../../src/templates/trellis/index.js";
+import {
+  ohMyWorkflowMdTemplate,
+  workflowMdTemplate,
+} from "../../src/templates/trellis/index.js";
 
 afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe("resolveWorkflowTemplate(native)", () => {
+describe("resolveWorkflowTemplate(bundled)", () => {
   it("returns the bundled native workflow content without network access", async () => {
     // No fetch stub installed — proves we never call the network for native.
     const resolved = await resolveWorkflowTemplate(NATIVE_WORKFLOW_ID);
     expect(resolved.id).toBe(NATIVE_WORKFLOW_ID);
     expect(resolved.source).toBe("bundled");
     expect(resolved.content).toBe(workflowMdTemplate);
+  });
+
+  it("returns the bundled oh-my workflow content without network access", async () => {
+    const resolved = await resolveWorkflowTemplate(OH_MY_WORKFLOW_ID);
+    expect(resolved.id).toBe(OH_MY_WORKFLOW_ID);
+    expect(resolved.source).toBe("bundled");
+    expect(resolved.content).toBe(ohMyWorkflowMdTemplate);
+    // The fork's default workflow carries Devin's run_subagent dispatch.
+    expect(resolved.content).toContain("[Devin]");
+    expect(resolved.content).toContain("run_subagent");
   });
 });
 
@@ -159,15 +173,18 @@ describe("resolveWorkflowTemplate(marketplace)", () => {
 });
 
 describe("listWorkflowTemplates", () => {
-  it("always includes the bundled native entry first", async () => {
+  it("always includes the bundled oh-my and native entries first", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => new Response("", { status: 500 })),
     );
     const { templates, errorMessage } = await listWorkflowTemplates();
     expect(errorMessage).toBeTruthy();
-    expect(templates[0].id).toBe(NATIVE_WORKFLOW_ID);
+    // oh-my is the fork default; native stays selectable second.
+    expect(templates[0].id).toBe(OH_MY_WORKFLOW_ID);
     expect(templates[0].source).toBe("bundled");
+    expect(templates[1].id).toBe(NATIVE_WORKFLOW_ID);
+    expect(templates[1].source).toBe("bundled");
   });
 
   it("includes workflow entries from the marketplace index", async () => {
@@ -203,9 +220,35 @@ describe("listWorkflowTemplates", () => {
 
     const { templates } = await listWorkflowTemplates();
     const ids = templates.map((t) => t.id);
+    expect(ids).toContain(OH_MY_WORKFLOW_ID);
     expect(ids).toContain(NATIVE_WORKFLOW_ID);
     expect(ids).toContain("tdd");
     expect(ids).toContain("channel-driven-subagent-dispatch");
     expect(ids).not.toContain("electron-fullstack");
+  });
+
+  it("does not let a marketplace entry shadow a bundled workflow id", async () => {
+    const index = {
+      version: 1,
+      templates: [
+        {
+          id: OH_MY_WORKFLOW_ID,
+          type: "workflow",
+          name: "Marketplace clone",
+          path: "workflows/oh-my/workflow.md",
+        },
+      ],
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () => new Response(JSON.stringify(index), { status: 200 }),
+      ),
+    );
+
+    const { templates } = await listWorkflowTemplates();
+    const ohMy = templates.filter((t) => t.id === OH_MY_WORKFLOW_ID);
+    expect(ohMy.length).toBe(1);
+    expect(ohMy[0].source).toBe("bundled");
   });
 });

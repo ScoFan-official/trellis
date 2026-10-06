@@ -122,7 +122,7 @@ program
   )
   .option(
     "--workflow <id>",
-    "Workflow template id for .trellis/workflow.md (default: native; e.g., tdd, channel-driven-subagent-dispatch)",
+    "Workflow template id for .trellis/workflow.md (default: oh-my; e.g., native, tdd, channel-driven-subagent-dispatch)",
   )
   .option(
     "--workflow-source <source>",
@@ -189,7 +189,7 @@ program
   .description("Upgrade the global Trellis CLI package")
   .option(
     "--tag <tag>",
-    "npm dist-tag or version to install (default follows current channel: latest, beta, or rc)",
+    "GitHub release tag to install (default: latest)",
   )
   .option("--dry-run", "Print the install command without running it")
   .action(async (options: Record<string, unknown>) => {
@@ -312,11 +312,11 @@ program
 program
   .command("workflow")
   .description(
-    "List or switch the project's .trellis/workflow.md template (native, tdd, channel-driven-subagent-dispatch, or marketplace)",
+    "List or switch the project's .trellis/workflow.md template (oh-my, native, tdd, channel-driven-subagent-dispatch, or marketplace)",
   )
   .option(
     "-t, --template <id>",
-    "Workflow template id (e.g., native, tdd, channel-driven-subagent-dispatch)",
+    "Workflow template id (e.g., oh-my, native, tdd, channel-driven-subagent-dispatch)",
   )
   .option(
     "-m, --marketplace <source>",

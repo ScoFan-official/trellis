@@ -3,9 +3,9 @@
  *
  * Centralizes how `trellis init --workflow` and `trellis workflow` discover and
  * fetch workflow.md content. Reuses `template-fetcher` helpers for registry
- * parsing, index probing, and git/http transport. The `native` workflow is a
- * virtual entry resolved directly from the bundled `workflowMdTemplate` to
- * avoid a duplicate file on disk that could drift out of sync.
+ * parsing, index probing, and git/http transport. The `native` and `oh-my`
+ * workflows are virtual entries resolved directly from bundled templates to
+ * avoid duplicate files on disk that could drift out of sync.
  *
  * Boundary: command-layer callers (init.ts, commands/workflow.ts) should NOT
  * touch raw marketplace structures. They go through `resolveWorkflowTemplate`
@@ -16,7 +16,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { workflowMdTemplate } from "../templates/trellis/index.js";
+import {
+  ohMyWorkflowMdTemplate,
+  workflowMdTemplate,
+} from "../templates/trellis/index.js";
 import {
   TIMEOUTS,
   TEMPLATE_INDEX_URL,
@@ -31,13 +34,28 @@ import {
 /**
  * The id used to refer to the bundled native workflow.
  *
- * Treated as Trellis-managed for hash-tracking: when this id is selected by
- * `init --workflow` or `trellis workflow`, `.trellis/workflow.md` stays in
- * `.template-hashes.json`. Any other id is user-managed local workflow and
- * must be removed from the hash file (the durable-state contract in
- * design.md "Durable-state contract").
+ * Upstream treats this id as Trellis-managed for hash-tracking. In this fork
+ * that role is played by {@link OH_MY_WORKFLOW_ID}; `native` remains bundled
+ * and selectable but behaves like any non-managed variant (its hash entry is
+ * dropped so `trellis update` never silently replaces it).
  */
 export const NATIVE_WORKFLOW_ID = "native";
+
+/**
+ * [oh-my] The id of the fork's bundled default workflow — Laber's variant with
+ * Devin `run_subagent` dispatch blocks.
+ *
+ * Treated as Trellis-managed for hash-tracking (the role `native` plays
+ * upstream): when this id is selected by `init --workflow` or `trellis
+ * workflow`, `.trellis/workflow.md` stays in `.template-hashes.json` and
+ * `trellis update` refreshes it. Any other id is user-managed local workflow
+ * and must be removed from the hash file (the durable-state contract in
+ * design.md "Durable-state contract").
+ */
+export const OH_MY_WORKFLOW_ID = "oh-my";
+
+/** [oh-my] Workflow id selected when `init --workflow` is not passed. */
+export const DEFAULT_WORKFLOW_ID = OH_MY_WORKFLOW_ID;
 
 /**
  * Resolved workflow template entry.
@@ -106,6 +124,32 @@ function nativeResolvedEntry(): ResolvedWorkflowTemplate {
   };
 }
 
+/**
+ * Bundled oh-my workflow entry — virtual, resolved without network access.
+ * [oh-my] This is the fork's default (and hash-managed) workflow.
+ */
+function ohMyListingEntry(): WorkflowTemplateListing {
+  return {
+    id: OH_MY_WORKFLOW_ID,
+    type: "workflow",
+    name: "oh-my-trellis Workflow",
+    description:
+      "Fork default: Trellis workflow with Devin run_subagent dispatch for Phase 2, bundled with the CLI",
+    path: "bundled:trellis/workflow-oh-my.md",
+    source: "bundled",
+  };
+}
+
+function ohMyResolvedEntry(): ResolvedWorkflowTemplate {
+  return {
+    ...ohMyListingEntry(),
+    content: ohMyWorkflowMdTemplate,
+  };
+}
+
+/** Ids that resolve to bundled content (a marketplace entry cannot shadow them). */
+const BUNDLED_WORKFLOW_IDS = new Set([OH_MY_WORKFLOW_ID, NATIVE_WORKFLOW_ID]);
+
 function parseSourceOrThrow(source: string): RegistrySource {
   try {
     return parseRegistrySource(source);
@@ -147,13 +191,14 @@ async function fetchWorkflowEntries(
 
 /**
  * List available workflow templates from the default marketplace (or a
- * user-supplied source). The bundled native entry is always included first.
+ * user-supplied source). The bundled `oh-my` and `native` entries are always
+ * included first (oh-my is the fork default).
  *
  * Returns metadata only — no content is fetched. Use `resolveWorkflowTemplate`
  * to fetch the actual workflow.md bytes for a chosen id.
  *
- * Network errors are surfaced as `errorMessage`. The native entry is still
- * returned so callers can fall back to it offline.
+ * Network errors are surfaced as `errorMessage`. The bundled entries are still
+ * returned so callers can fall back to them offline.
  */
 export async function listWorkflowTemplates(
   options: WorkflowResolveOptions = {},
@@ -161,7 +206,10 @@ export async function listWorkflowTemplates(
   templates: WorkflowTemplateListing[];
   errorMessage?: string;
 }> {
-  const result: WorkflowTemplateListing[] = [nativeListingEntry()];
+  const result: WorkflowTemplateListing[] = [
+    ohMyListingEntry(),
+    nativeListingEntry(),
+  ];
 
   let registry: RegistrySource | undefined;
   let indexUrl = TEMPLATE_INDEX_URL;
@@ -177,7 +225,7 @@ export async function listWorkflowTemplates(
 
   for (const t of fetched.templates) {
     if (t.type !== "workflow") continue;
-    if (t.id === NATIVE_WORKFLOW_ID) continue;
+    if (BUNDLED_WORKFLOW_IDS.has(t.id)) continue;
     result.push({
       id: t.id,
       type: "workflow",
@@ -194,6 +242,7 @@ export async function listWorkflowTemplates(
 /**
  * Resolve a workflow id to its content.
  *
+ * - `oh-my` → bundled `ohMyWorkflowMdTemplate` (offline, never errors).
  * - `native` → bundled `workflowMdTemplate` (offline, never errors).
  * - other id → fetch index via `template-fetcher`, find the matching
  *   `type: "workflow"` entry, then fetch its single file content.
@@ -204,6 +253,9 @@ export async function resolveWorkflowTemplate(
   id: string,
   options: WorkflowResolveOptions = {},
 ): Promise<ResolvedWorkflowTemplate> {
+  if (id === OH_MY_WORKFLOW_ID) {
+    return ohMyResolvedEntry();
+  }
   if (id === NATIVE_WORKFLOW_ID) {
     return nativeResolvedEntry();
   }
