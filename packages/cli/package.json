@@ -1,13 +1,14 @@
 {
-  "name": "@mindfoldhq/trellis",
-  "version": "0.6.17",
+  "name": "oh-my-trellis",
+  "version": "0.6.17-ohmy.1",
   "description": "AI capabilities grow like ivy — Trellis provides the structure to guide them along a disciplined path",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "bin": {
     "trellis": "./bin/trellis.js",
-    "tl": "./bin/trellis.js"
+    "tl": "./bin/trellis.js",
+    "oh-my-trellis": "./bin/trellis.js"
   },
   "publishConfig": {
     "access": "public"
@@ -85,6 +86,6 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/mindfold-ai/trellis.git"
+    "url": "https://github.com/ScoFan-official/trellis.git"
   }
 }

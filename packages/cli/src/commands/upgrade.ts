@@ -1,6 +1,16 @@
 import { spawnSync } from "node:child_process";
 import chalk from "chalk";
-import { PACKAGE_NAME, VERSION } from "../constants/version.js";
+import { VERSION } from "../constants/version.js";
+
+/**
+ * [oh-my] Fork releases ship as GitHub release tarballs on
+ * `ScoFan-official/trellis` (channel A), not on npm. `trellis upgrade`
+ * resolves the requested release tag to its `.tgz` asset and installs it with
+ * `npm install -g <url>` — the same mechanism the devin `oh-my-update`
+ * workflow uses.
+ */
+const RELEASES_REPO = "ScoFan-official/trellis";
+const RELEASES_API = `https://api.github.com/repos/${RELEASES_REPO}/releases`;
 
 export interface UpgradeOptions {
   tag?: string;
@@ -34,24 +44,81 @@ export interface UpgradeCommandPlan {
   binaryCheckCommand: string;
 }
 
-const NPM_TAG_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+const RELEASE_TAG_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
-export function resolveUpgradeTag(
-  currentVersion: string = VERSION,
-  requestedTag?: string,
-): string {
-  if (requestedTag) {
-    if (!NPM_TAG_RE.test(requestedTag)) {
-      throw new Error(
-        `Invalid npm tag/version "${requestedTag}". Use a simple dist-tag or version such as latest, beta, rc, or 0.6.0-beta.8.`,
-      );
-    }
-    return requestedTag;
+/**
+ * Resolve the GitHub release tag to install. `latest` (the default) resolves
+ * to the repo's most recent release; anything else must look like a release
+ * tag or version (`0.6.17-ohmy.2`, `v0.6.17-ohmy.2`).
+ */
+export function resolveUpgradeTag(requestedTag?: string): string {
+  if (!requestedTag || requestedTag === "latest") {
+    return "latest";
   }
+  if (!RELEASE_TAG_RE.test(requestedTag)) {
+    throw new Error(
+      `Invalid release tag/version "${requestedTag}". Use 'latest' or a release tag such as v0.6.17-ohmy.1.`,
+    );
+  }
+  return requestedTag;
+}
 
-  if (currentVersion.includes("-beta")) return "beta";
-  if (currentVersion.includes("-rc")) return "rc";
-  return "latest";
+interface ReleaseAssetResolution {
+  tarballUrl: string;
+  /** The resolved `tag_name` from the matched release. */
+  tagName: string;
+}
+
+interface GithubReleasePayload {
+  tag_name?: string;
+  assets?: { name?: string; browser_download_url?: string }[];
+}
+
+async function fetchReleasePayload(tag: string): Promise<GithubReleasePayload> {
+  const url =
+    tag === "latest"
+      ? `${RELEASES_API}/latest`
+      : `${RELEASES_API}/tags/${encodeURIComponent(tag)}`;
+  const response = await fetch(url, {
+    headers: {
+      Accept: "application/vnd.github+json",
+      "User-Agent": "oh-my-trellis",
+    },
+  });
+  if (response.ok) {
+    return (await response.json()) as GithubReleasePayload;
+  }
+  // If a bare version was given, retry with the conventional `v` prefix
+  // (and vice versa) so `--tag 0.6.17-ohmy.1` and `--tag v0.6.17-ohmy.1`
+  // both work.
+  if (response.status === 404 && tag !== "latest") {
+    const alternate = tag.startsWith("v") ? tag.slice(1) : `v${tag}`;
+    return fetchReleasePayload(alternate);
+  }
+  throw new Error(
+    `Could not resolve release "${tag}" on github.com/${RELEASES_REPO} (HTTP ${response.status}).`,
+  );
+}
+
+/** Resolve a release tag to its `.tgz` tarball asset URL. */
+export async function resolveReleaseTarball(
+  tag: string,
+): Promise<ReleaseAssetResolution> {
+  const release = await fetchReleasePayload(tag);
+  const tarball = release.assets?.find(
+    (a) =>
+      typeof a.browser_download_url === "string" &&
+      a.browser_download_url.endsWith(".tgz"),
+  );
+  if (!tarball?.browser_download_url) {
+    throw new Error(
+      `Release "${release.tag_name ?? tag}" on github.com/${RELEASES_REPO} has no .tgz asset to install.`,
+    );
+  }
+  return {
+    tarballUrl: tarball.browser_download_url,
+    tagName: release.tag_name ?? tag,
+  };
 }
 
 function binaryCheckCommand(
@@ -61,12 +128,10 @@ function binaryCheckCommand(
 }
 
 export function buildUpgradeCommand(
-  options: UpgradeOptions = {},
-  currentVersion: string = VERSION,
+  target: string,
+  tag: string,
   platform: NodeJS.Platform = process.platform,
 ): UpgradeCommandPlan {
-  const tag = resolveUpgradeTag(currentVersion, options.tag);
-  const target = `${PACKAGE_NAME}@${tag}`;
   const npmArgs = ["install", "-g", target];
   const displayCommand = `npm ${npmArgs.join(" ")}`;
   const spawnOptions: SpawnOptions = { stdio: "inherit", shell: false };
@@ -110,9 +175,11 @@ export async function upgrade(
   options: UpgradeOptions = {},
   runner: SpawnRunner = spawnSync,
 ): Promise<void> {
-  const plan = buildUpgradeCommand(options);
+  const tag = resolveUpgradeTag(options.tag);
+  const release = await resolveReleaseTarball(tag);
+  const plan = buildUpgradeCommand(release.tarballUrl, release.tagName);
 
-  console.log(chalk.cyan(`Upgrading Trellis CLI to ${plan.target}`));
+  console.log(chalk.cyan(`Upgrading Trellis CLI to ${release.tagName}`));
   console.log(chalk.gray(`Run: ${plan.displayCommand}`));
 
   if (options.dryRun) {
@@ -143,6 +210,6 @@ export async function upgrade(
   }
 
   console.log(chalk.green("\n✓ Trellis CLI upgrade completed"));
-  console.log(chalk.gray("Run: trellis --version"));
+  console.log(chalk.gray(`Run: trellis --version (was ${VERSION})`));
   console.log(chalk.gray(`Run: ${plan.binaryCheckCommand}`));
 }

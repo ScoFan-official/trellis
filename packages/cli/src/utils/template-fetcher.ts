@@ -1,8 +1,8 @@
 /**
  * Remote template fetcher for Trellis CLI
  *
- * Fetches spec templates from the official marketplace:
- * https://github.com/mindfold-ai/marketplace
+ * [oh-my] Fetches spec/workflow templates from the fork's marketplace:
+ * https://github.com/ScoFan-official/oh-my-trellis (marketplace/ directory)
  */
 
 import { randomUUID } from "node:crypto";
@@ -17,9 +17,9 @@ import { toPosix } from "./posix.js";
 // =============================================================================
 
 export const TEMPLATE_INDEX_URL =
-  "https://raw.githubusercontent.com/mindfold-ai/marketplace/main/index.json";
+  "https://raw.githubusercontent.com/ScoFan-official/oh-my-trellis/main/marketplace/index.json";
 
-const TEMPLATE_REPO = "gh:mindfold-ai/marketplace";
+const TEMPLATE_REPO = "gh:ScoFan-official/oh-my-trellis/marketplace";
 
 /** Map template type to installation path */
 const INSTALL_PATHS: Record<string, string> = {

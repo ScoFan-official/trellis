@@ -6,7 +6,7 @@ import inquirer from "inquirer";
 
 import { DIR_NAMES, FILE_NAMES, PATHS } from "../constants/paths.js";
 import type { AITool } from "../types/ai-tools.js";
-import { VERSION, PACKAGE_NAME } from "../constants/version.js";
+import { VERSION } from "../constants/version.js";
 import {
   getMigrationsForVersion,
   getAllMigrations,
@@ -43,7 +43,7 @@ import {
   // Configuration
   configYamlTemplate,
   gitignoreTemplate,
-  workflowMdTemplate,
+  ohMyWorkflowMdTemplate,
 } from "../templates/trellis/index.js";
 import { agentsMdContent } from "../templates/markdown/index.js";
 import {
@@ -900,7 +900,11 @@ async function collectTemplateFiles(
   // --force behavior applies. Partial tag-block merging is unsafe because
   // platform routing markers outside [workflow-state:*] blocks are also
   // script-consumed.
-  files.set(`${DIR_NAMES.WORKFLOW}/workflow.md`, workflowMdTemplate);
+  // [oh-my] Managed desired content is the fork's `oh-my` workflow. A project
+  // that selected `native` or a marketplace variant has no hash entry for this
+  // file (init/`trellis workflow` remove it), so it surfaces as a modified
+  // file prompt instead of being silently overwritten.
+  files.set(`${DIR_NAMES.WORKFLOW}/workflow.md`, ohMyWorkflowMdTemplate);
   // workspace/index.md stays excluded — it's runtime-appended by add_session.py
   // (journal index) and has no script-parsed structure.
   files.set(FILE_NAMES.AGENTS, buildAgentsMdTemplate(cwd));
@@ -1368,18 +1372,28 @@ function getInstalledVersion(cwd: string): string {
 }
 
 /**
- * Fetch latest version from npm registry
+ * [oh-my] Fetch the latest released version from GitHub.
+ *
+ * The fork (`oh-my-trellis`) ships as GitHub release tarballs on
+ * `ScoFan-official/trellis`, not on npm — the npm registry lookup upstream
+ * used is replaced by the releases API. `tag_name` may carry a leading `v`.
  */
-async function getLatestNpmVersion(): Promise<string | null> {
+async function getLatestReleaseVersion(): Promise<string | null> {
   try {
     const response = await fetch(
-      `https://registry.npmjs.org/${PACKAGE_NAME}/latest`,
+      "https://api.github.com/repos/ScoFan-official/trellis/releases/latest",
+      {
+        headers: {
+          Accept: "application/vnd.github+json",
+          "User-Agent": "oh-my-trellis",
+        },
+      },
     );
     if (!response.ok) {
       return null;
     }
-    const data = (await response.json()) as { version?: string };
-    return data.version ?? null;
+    const data = (await response.json()) as { tag_name?: string };
+    return data.tag_name?.replace(/^v/, "") ?? null;
   } catch {
     return null;
   }
@@ -2106,35 +2120,35 @@ export async function update(options: UpdateOptions): Promise<void> {
   console.log(chalk.cyan("\nTrellis Update"));
   console.log(chalk.cyan("══════════════\n"));
 
-  // Set up proxy before any network calls (npm version check)
+  // Set up proxy before any network calls (release version check)
   setupProxy();
 
   // Get versions
   const projectVersion = getInstalledVersion(cwd);
   const cliVersion = VERSION;
-  const latestNpmVersion = await getLatestNpmVersion();
+  const latestReleaseVersion = await getLatestReleaseVersion();
 
   // Version comparison
   const cliVsProject = compareVersions(cliVersion, projectVersion);
-  const cliVsNpm = latestNpmVersion
-    ? compareVersions(cliVersion, latestNpmVersion)
+  const cliVsRelease = latestReleaseVersion
+    ? compareVersions(cliVersion, latestReleaseVersion)
     : 0;
 
   // Display versions with context
   console.log(`Project version: ${chalk.white(projectVersion)}`);
   console.log(`CLI version:     ${chalk.white(cliVersion)}`);
-  if (latestNpmVersion) {
-    console.log(`Latest on npm:   ${chalk.white(latestNpmVersion)}`);
+  if (latestReleaseVersion) {
+    console.log(`Latest release:  ${chalk.white(latestReleaseVersion)}`);
   } else {
-    console.log(chalk.gray("Latest on npm:   (unable to fetch)"));
+    console.log(chalk.gray("Latest release:  (unable to fetch)"));
   }
   console.log("");
 
-  // Check if CLI is outdated compared to npm
-  if (cliVsNpm < 0 && latestNpmVersion) {
+  // Check if CLI is outdated compared to the latest release
+  if (cliVsRelease < 0 && latestReleaseVersion) {
     console.log(
       chalk.yellow(
-        `⚠️  Your CLI (${cliVersion}) is behind npm (${latestNpmVersion}).`,
+        `⚠️  Your CLI (${cliVersion}) is behind the latest release (${latestReleaseVersion}).`,
       ),
     );
     console.log(chalk.yellow(`   Run: trellis upgrade\n`));

@@ -59,7 +59,7 @@ import {
 import { VERSION } from "../../src/constants/version.js";
 import { DIR_NAMES, FILE_NAMES, PATHS } from "../../src/constants/paths.js";
 import { computeHash } from "../../src/utils/template-hash.js";
-import { workflowMdTemplate } from "../../src/templates/trellis/index.js";
+import { ohMyWorkflowMdTemplate } from "../../src/templates/trellis/index.js";
 import {
   COPILOT_INSTRUCTIONS_BLOCK_END,
   COPILOT_INSTRUCTIONS_BLOCK_START,
@@ -838,7 +838,7 @@ describe("update() integration", () => {
   it("#12b versioned upgrade scenario applies auto-updates, additive config sections, and modified-file skips", async () => {
     await setupProject();
 
-    const expectedWorkflow = replacePythonCommandLiterals(workflowMdTemplate);
+    const expectedWorkflow = replacePythonCommandLiterals(ohMyWorkflowMdTemplate);
     const expectedGetContext = readProjectFile(MANAGED_FILE);
     const userModifiedScript = `${PATHS.SCRIPTS}/add_session.py`;
     const userModifiedScriptContent = "# user customized add_session.py\n";
@@ -876,11 +876,14 @@ describe("update() integration", () => {
     // auto-updated to the current packaged template.
     expect(readProjectFile(PATHS.WORKFLOW_GUIDE_FILE)).toBe(expectedWorkflow);
     expect(readProjectFile(MANAGED_FILE)).toBe(expectedGetContext);
-    // Prefix, not the whole marker: the inline block gains members as
-    // sub-agent-less platforms are added, and this assertion is about the
-    // block surviving the update, not about who is currently in it.
+    // The oh-my workflow keeps the inline block and adds a dedicated
+    // [Devin] routing block; both must survive the update.
     expect(readProjectFile(PATHS.WORKFLOW_GUIDE_FILE)).toContain(
-      "[codex-inline, Kilo, Antigravity, Devin",
+      "[codex-inline, Kilo, Antigravity",
+    );
+    expect(readProjectFile(PATHS.WORKFLOW_GUIDE_FILE)).toContain("[Devin]");
+    expect(readProjectFile(PATHS.WORKFLOW_GUIDE_FILE)).toContain(
+      "run_subagent",
     );
     expect(readProjectFile(PATHS.WORKFLOW_GUIDE_FILE)).not.toContain("[Codex]");
 
@@ -1566,14 +1569,15 @@ describe("update() integration", () => {
     await update({ force: true });
 
     const updated = fs.readFileSync(workflowPath, "utf-8");
-    expect(updated).toBe(replacePythonCommandLiterals(workflowMdTemplate));
+    expect(updated).toBe(replacePythonCommandLiterals(ohMyWorkflowMdTemplate));
     expect(updated).toContain(
       "[Gemini, Qoder, Copilot, Reasonix, Trae, Grok, Kimi Code]",
     );
     expect(updated).toContain(
       "[/Claude Code, Cursor, OpenCode, codex-sub-agent, CodeBuddy, Droid, Pi, ZCode, Snow, Oh My Pi]",
     );
-    expect(updated).toContain("[codex-inline, Kilo, Antigravity, Devin");
+    expect(updated).toContain("[Devin]");
+    expect(updated).toContain("run_subagent");
     expect(updated).not.toContain("[Codex]");
     expect(updated).not.toContain("[Kilo, Antigravity, Windsurf]");
     expect(updated).not.toContain("legacy body");
