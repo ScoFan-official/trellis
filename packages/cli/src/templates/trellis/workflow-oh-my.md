@@ -294,7 +294,7 @@ When a user request matches one of these intents inside an active task, route fi
 [Devin]
 
 - Planning or unclear requirements -> `trellis-brainstorm` (main session, interactive).
-- `in_progress` implementation/check -> dispatch sub-agents via `run_subagent` (profile `subagent_general`), foreground; role cards are `.trellis/agents/implement.md` and `.trellis/agents/check.md`. The main session orchestrates and relays reports — it does not edit product code or review inline.
+- `in_progress` implementation/check -> dispatch sub-agents via `run_subagent` (profile `subagent_general`; check runs as two parallel axis workers — see step 2.2); role cards are `.trellis/agents/implement.md` and `.trellis/agents/check.md`. The main session orchestrates and relays reports — it does not edit product code or review inline.
 - Repeated debugging -> `trellis-break-loop`; spec updates -> `trellis-update-spec` (main session).
 
 [/Devin]
@@ -560,28 +560,24 @@ Dispatch the implement sub-agent via `run_subagent` (profile `subagent_general`,
 
 [Claude Code, Cursor, OpenCode, codex-sub-agent, Kiro, Gemini, Qoder, CodeBuddy, Copilot, Droid, Pi, Oh My Pi, ZCode, Snow, Reasonix, Trae, Grok, Kimi Code]
 
-Spawn the check sub-agent:
+Spawn TWO `trellis-check` sub-agents in parallel — one per axis, same role card `.trellis/agents/check.md`:
 
-- **Agent type**: `trellis-check`
-- **Task description**: Review all code changes against specs and task artifacts; fix any findings directly; ensure lint and type-check pass
-- **Dispatch prompt guard**: The prompt MUST start with `Active task: <task path>`, then tell the spawned agent it is already the `trellis-check` sub-agent and must review/fix directly, not spawn another `trellis-check` / `trellis-implement`.
+- **Worker 1 — `Axis: standards`** (writable): review all code changes against `.trellis/spec/` standards; fix mechanical findings directly; run the repo's lint / typecheck / tests to verify.
+- **Worker 2 — `Axis: spec`** (read-only): review all code changes against `prd.md`, `design.md` if present, and `implement.md` if present; report findings only, never edit files.
+- **Dispatch prompt guard**: each prompt MUST start with `Active task: <task path>` and an `Axis: standards` / `Axis: spec` line, then tell the spawned agent it is already the `trellis-check` sub-agent on that axis and must review directly, not spawn another `trellis-check` / `trellis-implement`.
 
-The check agent's job:
-- Review code changes against specs
-- Review code changes against `prd.md`, `design.md` if present, and `implement.md` if present
-- Auto-fix issues it finds
-- Run lint and typecheck to verify
+Collect both reports and present them side by side — never merge or re-rank findings across axes.
 
 [/Claude Code, Cursor, OpenCode, codex-sub-agent, Kiro, Gemini, Qoder, CodeBuddy, Copilot, Droid, Pi, Oh My Pi, ZCode, Snow, Reasonix, Trae, Grok, Kimi Code]
 
 [Devin]
 
-Dispatch the check sub-agent via `run_subagent` (profile `subagent_general`, foreground):
+Dispatch TWO check sub-agents via `run_subagent` (profile `subagent_general`, `is_background=true` on both so they run in parallel), then collect each report with `read_subagent` (`block=true`):
 
-- **Agent type**: `trellis-check` — role card `.trellis/agents/check.md`.
-- **Task description**: Review all code changes on two axes (Standards + Spec) against task artifacts and `.trellis/spec/`; fix mechanical issues directly; run build / typecheck / lint / full tests in the repo's own commands.
-- **Dispatch prompt guard**: The `task` prompt MUST start with `Active task: <task path>`, then say: "You are the `trellis-check` sub-agent. Read `.trellis/agents/check.md` and follow it exactly. Review and fix directly — do not spawn further sub-agents."
-- The main session does not review or fix inline — it relays the report; open design/judgment findings come back to the user.
+- **Agent type**: `trellis-check` — one role card `.trellis/agents/check.md`; the `Axis:` parameter selects which review runs.
+- **Worker 1 (`Axis: standards`, writable) task prompt**: starts `Active task: <task path>`, then: "You are the `trellis-check` sub-agent on axis `standards`. Read `.trellis/agents/check.md` and follow it exactly for your axis — you are writable: fix mechanical issues and run the repo's verification. Do not spawn further sub-agents."
+- **Worker 2 (`Axis: spec`, read-only) task prompt**: same shape, axis `spec` — "you are READ-ONLY: report findings, never edit files. Do not spawn further sub-agents."
+- **Aggregate**: the main session places the two reports side by side under `## Standards` / `## Spec` — never merge or re-rank findings across axes — and relays them to the user; open design/judgment findings come back to the user. It does not review or fix inline.
 
 [/Devin]
 
@@ -595,6 +591,8 @@ Load the `trellis-check` skill and verify the code per its guidance:
 If issues are found → fix → re-check, until green.
 
 [/codex-inline, Kilo, Antigravity, DeepSeek Harness]
+
+**Channel runtime note**: workers spawned via `trellis channel spawn --agent check` take their axis from an `Axis:` line in the spawn task text; an unmarked `check` spawn falls back to running both axes serially (the card's default).
 
 **Final pass (before Phase 3.4 commit)**: the last 2.2 of a task must run full-scope, not just on the latest implement chunk. List all affected packages with `python3 ./.trellis/scripts/get_context.py --mode packages`, then load each package's spec index Quality Check section. This catches cross-layer / multi-package issues a mid-iteration local 2.2 cannot.
 

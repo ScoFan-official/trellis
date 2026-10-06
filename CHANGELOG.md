@@ -2,6 +2,24 @@
 
 Versions are `UPSTREAM_BASE-ohmy.N`: the suffix increments for our changes on a given upstream base; syncing to a new upstream release resets `-ohmy.N` to `-ohmy.1`.
 
+## 0.6.17-ohmy.3
+
+Parallel dual-axis check — Phase 2.2 now runs `trellis-check` as two
+concurrent workers so the axes don't pollute each other (mattpocock
+canonical `code-review` pattern).
+
+- `trellis/agents/check.md` gains an `Axis:` contract: the dispatch prompt
+  declares `Axis: standards` or `Axis: spec`; a bare spawn / legacy dispatch
+  with no axis still runs both axes serially (backward compatible).
+- `Axis: standards` is **writable** — mechanical self-fix + full repo
+  verification, reports `### Standards`. `Axis: spec` is **READ-ONLY** —
+  reports `### Spec` findings, never edits files or runs verification.
+- `workflow-oh-my.md` 2.2: `[Devin]` dispatches two `run_subagent` calls
+  (`is_background=true`) and collects both reports via `read_subagent`;
+  the generic sub-agent block uses the same two-worker pattern; channel
+  note records the spawn-task `Axis:` convention. Reports are aggregated
+  side by side, never merged across axes.
+
 ## 0.6.17-ohmy.2
 
 Single-repo surface revision — `ScoFan-official/oh-my-trellis` is now THE

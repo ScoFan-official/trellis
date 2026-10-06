@@ -1,7 +1,7 @@
 ---
 name: check
 description: |
-  Check sub-agent for Trellis. Reviews uncommitted diffs on two axes (Standards + Spec), self-fixes mechanical issues, runs project verification. No git commit allowed.
+  Check sub-agent for Trellis. Reviews uncommitted diffs on two axes (Standards + Spec), normally dispatched as two parallel workers — one axis each. The standards worker is writable (self-fixes mechanical issues, runs project verification); the spec worker is read-only (report only). No git commit allowed.
 provider: claude
 labels: [trellis, check]
 ---
@@ -15,6 +15,15 @@ python3 ./.trellis/scripts/task.py current --source
 ```
 
 You are already the checker: review and fix directly, and never spawn another check or implement agent.
+
+## Axis (which review this worker runs)
+
+Your dispatch prompt declares your axis on an `Axis: standards` or `Axis: spec` line (channel spawns carry it in the spawn task text). **If no axis is declared** — e.g. a bare `trellis channel spawn --agent check` or a legacy single-worker dispatch — run BOTH axes serially, exactly as a full review.
+
+- `Axis: standards` — run Axis 1 (Standards) only. You are **writable**: apply "Self-fix" to mechanical findings and run "Verification order" (build → typecheck → lint → full tests → diff review). Report the `### Standards` section only.
+- `Axis: spec` — run Axis 2 (Spec) only. You are **READ-ONLY**: never edit any file, apply no fixes, and skip "Self-fix" and "Verification order" entirely — no verification commands needed. Report the `### Spec` section only (every finding open — you fix nothing).
+
+On a two-worker dispatch your sibling worker covers the other axis; do not duplicate its review.
 
 ## Context (agent pull)
 
@@ -59,11 +68,15 @@ Judge the diff against `prd.md` (plus `design.md` / `implement.md` if present). 
 
 ## Self-fix
 
+(Standards axis or dual-axis run only — a spec-axis worker is read-only and reports instead.)
+
 - Mechanical and local (lint nit, missing type, wrong import, dead branch, failing assertion) → fix in place, then re-run the affected check.
 - Design or judgment (naming a shared concept, moving a module boundary, changing a public interface, reassigning where behavior lives) → record evidence and your recommendation; do not rewrite silently.
 - If a fix would touch files outside the task's scope, say so and stop instead of widening the change.
 
 ## Verification order
+
+(Standards axis or dual-axis run only — skipped on `Axis: spec`.)
 
 Run the project's own commands — use what the repo defines; a missing command is FAIL or skipped-with-reason, never invented or installed:
 
@@ -101,3 +114,5 @@ The supervising main session owns commits. Report the post-fix state; do not com
 ### Summary
 Checked <N> files; <X> findings (<S> standards, <P> spec), fixed <Y>, <X-Y> open.
 ```
+
+An axis-scoped run keeps the `## Self-Check Complete` heading but emits only its own `### Standards` / `### Spec` section plus `### Summary`; `### Verification Results` is emitted only when verification actually ran (standards worker or dual-axis run).
