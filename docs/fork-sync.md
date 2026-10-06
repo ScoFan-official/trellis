@@ -63,16 +63,36 @@ upstream version. On a new upstream base, reset `N` to 1.
 
 ## Release channel
 
-CLI distribution is via GitHub release tarballs on `ScoFan-official/trellis`
-(channel A). The CLI's update check and `trellis upgrade` query
-`api.github.com/repos/ScoFan-official/trellis/releases` — not npm. The
-default registry/marketplace source points at the fork
-(`gh:ScoFan-official/oh-my-trellis/marketplace`); custom
+Canonical CLI distribution is via GitHub release tarballs on
+`ScoFan-official/oh-my-trellis` under `cli-v<upstream>-ohmy.<N>` tags —
+`oh-my-trellis` is THE user-facing repo; this fork is source/build workspace
+only. The CLI's update check and `trellis upgrade` list
+`api.github.com/repos/ScoFan-official/oh-my-trellis/releases` and pick the
+newest `cli-v*` tag — not npm, and never `/releases/latest` (the pack's own
+`vX.Y.Z` releases share the list). The default registry/marketplace source
+points at the pack repo root (`gh:ScoFan-official/oh-my-trellis`); custom
 `--workflow-source` / `--registry` overrides are unchanged upstream plumbing.
+
+### Release procedure
+
+1. Tag this fork at the release commit and push:
+   `git tag v<upstream>-ohmy.<N> && git push origin v<upstream>-ohmy.<N>`
+   (e.g. `v0.6.17-ohmy.2`).
+2. On the pack repo (`ScoFan-official/oh-my-trellis`), tag the matching
+   `cli-` alias and push:
+   `git tag cli-v<upstream>-ohmy.<N> && git push origin cli-v<upstream>-ohmy.<N>`
+3. The pack's `.github/workflows/cli-release.yml` fires on `cli-v*`, clones
+   this fork at the matching `v<upstream>-ohmy.<N>` tag
+   (`${GITHUB_REF_NAME#cli-}`), runs `pnpm --filter oh-my-trellis build`,
+   `pnpm pack`, and `gh release create` with the tarball.
+
+No PAT needed — the pack workflow clones the public fork anonymously.
+`.github/workflows/release.yml` here is demoted to `workflow_dispatch`
+(internal tarball testing only); fork-hosted releases are deprecated.
 
 `.github/workflows/publish.yml` is upstream's npm pipeline and is dormant on
 the fork: its `on:` block was changed to `workflow_dispatch` only, because
 upstream's triggers (`release: published`, `v*` tag push) both fire on a fork
 release. `verify-packed-cli` also expects cli version == core version, which
-`-ohmy.N` intentionally breaks. Fork releases are manual `.tgz` uploads on
-the GitHub release; re-enable the triggers when channel B (npm) ships.
+`-ohmy.N` intentionally breaks. Re-enable the triggers when channel B (npm)
+ships.

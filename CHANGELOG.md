@@ -2,6 +2,28 @@
 
 Versions are `UPSTREAM_BASE-ohmy.N`: the suffix increments for our changes on a given upstream base; syncing to a new upstream release resets `-ohmy.N` to `-ohmy.1`.
 
+## 0.6.17-ohmy.2
+
+Single-repo surface revision — `ScoFan-official/oh-my-trellis` is now THE
+user-facing repo; the fork is source/build workspace only.
+
+- Update surface repointed: `trellis update` version check and
+  `trellis upgrade` now read `ScoFan-official/oh-my-trellis` releases
+  filtered to `cli-v*` tags (the pack's own `vX.Y.Z` releases share the list,
+  so `/releases/latest` is never used). `--tag` accepts `0.6.17-ohmy.N`,
+  `v…`, or `cli-v…` spellings.
+- Fixed the comparator wart: `0.6.17-ohmy.N` on base `0.6.17` no longer
+  reports "older than project 0.6.17" — same-base `X.Y.Z-ohmy.N` ranks >=
+  `X.Y.Z` (new `compareOhmyVersions`; mirrored in `session_context.py`'s
+  update hint).
+- `oh-my-update` workflow template: check/install URLs moved to
+  oh-my-trellis `cli-v*` releases; registry flag aligned to repo-root
+  `-r gh:ScoFan-official/oh-my-trellis`.
+- Fork-hosted releases deprecated: `.github/workflows/release.yml` is now
+  `workflow_dispatch`-only; canonical artifacts publish from oh-my-trellis
+  `cli-v*` tags (its `cli-release.yml` clones this fork at the matching
+  `v*` tag, builds, packs and creates the release).
+
 ## 0.6.17-ohmy.1
 
 Upstream base: `v0.6.17` (tagged `upstream-0.6.17`, commit `833a5846`).

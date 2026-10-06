@@ -10,14 +10,16 @@ Update this project's oh-my-trellis stack: the global `oh-my-trellis`/`trellis` 
 
 ```bash
 trellis --version
-gh api repos/ScoFan-official/trellis/releases/latest
+gh api repos/ScoFan-official/oh-my-trellis/releases
 ```
+
+CLI releases live on `ScoFan-official/oh-my-trellis` tagged `cli-v<ver>` (e.g. `cli-v0.6.17-ohmy.2`). The repo's own pack releases (`vX.Y.Z`) share the same list — filter `tag_name` on the `cli-v` prefix and pick the newest match. Do NOT use `/releases/latest`: it can resolve to a pack release.
 
 Record:
 
-- `current` = the version `trellis --version` prints (e.g. `0.6.17-ohmy.1`)
-- `latest` = `tag_name` from the release response, minus a leading `v`
-- `tarball` = the `browser_download_url` of the `.tgz` asset in `assets`
+- `current` = the version `trellis --version` prints (e.g. `0.6.17-ohmy.2`)
+- `latest` = the newest `cli-v*` `tag_name`, minus the `cli-v` prefix (e.g. `0.6.17-ohmy.2`)
+- `tarball` = `https://github.com/ScoFan-official/oh-my-trellis/releases/download/cli-v<latest>/oh-my-trellis-<latest>.tgz` (or the `.tgz` asset's `browser_download_url` from the release response)
 
 If `gh` is unavailable or the API call fails, stop and report — do not guess the latest version.
 
@@ -39,7 +41,7 @@ Ask the user to confirm the update. Do not proceed on silence; on a "no", stop a
 npm i -g <tarball>   # the release .tgz asset URL from Step 1
 trellis update       # refresh .trellis/ + .devin/ managed templates
 npx skills add ScoFan-official/oh-my-trellis --agent devin --copy
-trellis init -r gh:ScoFan-official/oh-my-trellis/marketplace -t agent-workflow --append
+trellis init -r gh:ScoFan-official/oh-my-trellis -t agent-workflow --append
 ```
 
 Run each step only if the previous succeeded; on failure stop and report which step failed.

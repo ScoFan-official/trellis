@@ -6,7 +6,7 @@
 </picture>
 </p>
 
-> **oh-my-trellis fork** — this is the [oh-my-trellis](https://github.com/ScoFan-official/oh-my-trellis) distribution of [mindfold-ai/trellis](https://github.com/mindfold-ai/trellis) (AGPL-3.0): upstream Trellis plus the oh-my customization layer (mattpocock-flavored role cards, Devin sub-agent dispatch, `oh-my` workflow template, `oh-my-update` self-update). Versions are `UPSTREAM-ohmy.N`; install from [releases](https://github.com/ScoFan-official/trellis/releases): `npm i -g https://github.com/ScoFan-official/trellis/releases/download/<tag>/oh-my-trellis-<ver>.tgz`.
+> **oh-my-trellis fork** — this repo is the source/build workspace of the [oh-my-trellis](https://github.com/ScoFan-official/oh-my-trellis) distribution of [mindfold-ai/trellis](https://github.com/mindfold-ai/trellis) (AGPL-3.0): upstream Trellis plus the oh-my customization layer (mattpocock-flavored role cards, Devin sub-agent dispatch, `oh-my` workflow template, `oh-my-update` self-update). Versions are `UPSTREAM-ohmy.N`; install from [oh-my-trellis releases](https://github.com/ScoFan-official/oh-my-trellis/releases) (`cli-v*` tags): `npm i -g https://github.com/ScoFan-official/oh-my-trellis/releases/download/cli-v<ver>/oh-my-trellis-<ver>.tgz`.
 
 <p align="center">
 <strong>An out-of-the-box engineering framework for AI coding.</strong><br/>
