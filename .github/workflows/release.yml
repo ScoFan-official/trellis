@@ -1,0 +1,34 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  cli-tarball:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter oh-my-trellis build
+      - name: Pack CLI
+        id: pack
+        working-directory: packages/cli
+        run: |
+          TGZ=$(pnpm pack --pack-destination "$GITHUB_WORKSPACE" 2>/dev/null | tail -1 | tr -d '\r')
+          [ -f "$GITHUB_WORKSPACE/$TGZ" ] || TGZ=$(basename "$TGZ")
+          echo "tgz=$TGZ" >> "$GITHUB_OUTPUT"
+      - name: Create release with asset
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release create "${{ github.ref_name }}" "${{ steps.pack.outputs.tgz }}" --generate-notes
