@@ -675,15 +675,25 @@ describe("configurePlatform", () => {
   it("configurePlatform('devin') writes workflows + skills", async () => {
     await configurePlatform("devin", tmpDir);
 
-    // Commands as workflows
+    // Commands as workflows, plus the bundled oh-my-update workflow.
     const workflowsRoot = path.join(tmpDir, ".devin", "workflows");
     expect(fs.existsSync(workflowsRoot)).toBe(true);
     const wfFiles = fs
       .readdirSync(workflowsRoot)
       .filter((f) => f.endsWith(".md"));
     expect(wfFiles.length).toBe(
-      resolveCommands(AI_TOOLS.devin.templateContext).length,
+      resolveCommands(AI_TOOLS.devin.templateContext).length + 1,
     );
+    // The extra file is the fork's `oh-my-update` Devin workflow.
+    expect(
+      fs.existsSync(path.join(workflowsRoot, "oh-my-update.md")),
+    ).toBe(true);
+    // Devin's `trellis-start` override replaces the common version.
+    const startContent = fs.readFileSync(
+      path.join(workflowsRoot, "trellis-start.md"),
+      "utf-8",
+    );
+    expect(startContent).toContain("Active task status");
 
     // Skills
     const skillsDir = path.join(tmpDir, ".devin", "skills");
