@@ -3,7 +3,9 @@
 
 This file is the single place the CLAI (ClaiDevSkill) fork diverges from
 upstream Trellis in script logic. Call sites stay thin: one or two lines in
-`task.py` / `session_context.py` delegate here.
+`task.py` (start gate / finish warn), `common/task_store.py` (create sugar /
+archive warn), `common/task_context.py` (validate reconcile), and
+`common/session_context.py` (context rendering) delegate here.
 
 CLAI DELTA LIST (numbered for the contract document — when an upstream
 `trellis update` conflicts, reconcile against this list item by item):
