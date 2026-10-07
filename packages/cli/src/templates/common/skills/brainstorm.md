@@ -24,7 +24,7 @@ Use this skill during Phase 1 planning to turn the user's request into clear req
 
 ## Preconditions
 
-Use this skill only after task-creation consent has been given and the user is ready to enter Trellis planning.
+Use this skill only once task creation is cleared per the repo's autonomy mode (`autonomy: gated` = consent given; `hands-off` = auto-passed) and the user is ready to enter Trellis planning.
 
 If no task exists yet, create one:
 

@@ -45,9 +45,10 @@ function getTaskStatus(ctx, platformInput = null) {
   if (!taskRef) {
     return (
       "Status: NO ACTIVE TASK\n" +
-      "Next-Action: Classify the current turn before creating any Trellis task. " +
-      "Simple conversation / small task asks only whether this turn should create a Trellis task. " +
-      "Complex task asks whether task creation and planning are allowed."
+      "Next-Action: Classify the current turn, then handle task creation per the " +
+      "repo's autonomy mode (.trellis/config.yaml `autonomy`): gated asks whether " +
+      "this turn may create a Trellis task (complex turns also ask about planning); " +
+      "hands-off creates the task without asking when one is warranted."
     )
   }
 

@@ -231,8 +231,9 @@ def _get_task_status(trellis_dir: Path, hook_input: dict) -> str:
     if not active.task_path:
         return (
             "Status: NO ACTIVE TASK\n"
-            "Next: Classify the current turn and ask for task-creation consent "
-            "before creating any Trellis task."
+            "Next: Classify the current turn and handle task creation per the repo's "
+            "autonomy mode (.trellis/config.yaml `autonomy` — hands-off auto-creates "
+            "when warranted, gated asks consent first)."
         )
 
     task_ref = active.task_path

@@ -156,3 +156,13 @@ channel:
 #
 # prompt_injection:
 #   skip_keyword: "no-trellis"   # "" disables the escape hatch entirely
+
+#-------------------------------------------------------------------------------
+# Autonomy mode for gated workflow steps.
+#   gated      (B档) ask the user at each gate: task creation, start, commit,
+#              finish-work
+#   hands-off  (C档) auto-pass those gates — the user can veto afterwards
+# The four always-stop rules in .trellis/domains/DISCIPLINE.md apply under
+# either mode, and an explicit verbal stop always wins over hands-off.
+#
+# autonomy: hands-off

@@ -9,6 +9,7 @@ This project is managed by Trellis. The working knowledge you need lives under `
 - `.trellis/spec/` — package- and layer-scoped coding guidelines (read before writing code in a given layer)
 - `.trellis/workspace/` — per-developer journals and session traces
 - `.trellis/tasks/` — active and archived tasks (PRDs, research, jsonl context)
+- `.trellis/domains/` — domain layer: routing rules in `DISCIPLINE.md`, board index in `REGISTRY.md`
 
 If a Trellis command is available on your platform (e.g. `/trellis:finish-work`, `/trellis:continue`), prefer it over manual steps. Not every platform exposes every command.
 

@@ -16,6 +16,8 @@ python3 ./.trellis/scripts/task.py current --source
 
 You are already the checker: review and fix directly, and never spawn another check or implement agent.
 
+Restate-first is standing role behavior: after reading the task context below, reply with a one-line restatement of your task understanding — task / domain / flag status / next step — before reviewing or changing anything.
+
 ## Axis (which review this worker runs)
 
 Your dispatch prompt declares your axis on an `Axis: standards` or `Axis: spec` line (channel spawns carry it in the spawn task text). **If no axis is declared** — e.g. a bare `trellis channel spawn --agent check` or a legacy single-worker dispatch — run BOTH axes serially, exactly as a full review.
@@ -34,8 +36,9 @@ Before reviewing, read in this order:
 3. `<task-path>/design.md` if present — technical design
 4. `<task-path>/implement.md` if present — execution plan
 5. `.trellis/spec/` — project-wide guidelines (load only what is relevant to the diff under review)
-6. `.agents/skills/verification-loop/SKILL.md` if present — this repo's verification gate; its six-stage order and READY/NOT READY rule apply
-7. `.devin/skills/trellis-check/SKILL.md` if present — the extended checklist (cross-layer data flow, code reuse, import/dependency, same-layer consistency); apply its dimension checks when the diff spans layers
+6. `.trellis/domains/REGISTRY.md` — load when the diff touches `.trellis/domains/` or a task's `meta.domain`; it is the input for the reconciliation baseline below
+7. `.agents/skills/verification-loop/SKILL.md` if present — this repo's verification gate; its six-stage order and READY/NOT READY rule apply
+8. `.devin/skills/trellis-check/SKILL.md` if present — the extended checklist (cross-layer data flow, code reuse, import/dependency, same-layer consistency); apply its dimension checks when the diff spans layers
 
 ## Review — two axes, reported separately
 
@@ -57,6 +60,7 @@ Judge the diff against the repo's documented standards (`.trellis/spec/` files y
 - **Message Chains** — long `a.b().c().d()` navigation
 - **Middle Man** — a wrapper that mostly just delegates
 - **Refused Bequest** — a subclass ignoring/overriding most of its inheritance
+- **Domain/Registry drift** — when the diff touches `.trellis/domains/` or `meta.domain`: every board directory has a `REGISTRY.md` line and every REGISTRY line resolves to an existing directory (mechanical reconciliation, no judgement)
 
 ### Axis 2 — Spec
 

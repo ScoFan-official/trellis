@@ -1,6 +1,8 @@
 # Finish Work
 
-Wrap up the current session: archive the active task (and any other completed-but-unarchived tasks the user wants to clean up) and record the session journal. Code commits are NOT done here — those happen in workflow Phase 3.4 before you invoke this command.
+Wrap up the current session: archive the active task (and any other completed-but-unarchived tasks the user wants to clean up) and record the session journal. Code commits are NOT done here — those happen in workflow Phase 3.4 before you invoke this command; pushing happens in Step 5 below.
+
+`[B档]` the user invokes this command once Phase 3.4 commits are clean. `[C档]` the AI runs it itself after Phase 3.4 and reports the archive + journal + push result — the user can veto afterwards.
 
 ## Step 1: Survey current state
 
@@ -64,3 +66,10 @@ If there is no active task and the user did not confirm any cleanup archives, sk
 Use the work-commit hashes produced in Phase 3.4 (visible in Step 1's `Recent commits` list, or via `git log --oneline`) for `--commit`. Do not include the archive commit hashes from Step 3. This produces a `chore: record journal` commit.
 
 Final git log order: `<work commits from 3.4>` → `chore(task): archive ...` (one or more) → `chore: record journal`.
+
+## Step 5: Push if a remote exists
+
+Truth rule: with a remote configured, "not pushed = not done"; without one, "not committed = not done".
+
+- `git remote` lists at least one remote → run `git push`.
+- No remote configured, or the push fails → warn once and continue — do NOT block the archive or journal steps on it.

@@ -46,7 +46,7 @@ From Step 1 you know the current task and status. Check the task directory:
   ```bash
   {{PYTHON_CMD}} ./.trellis/scripts/get_context.py --mode phase --step 2.1 --platform {{CLI_FLAG}}
   ```
-- **No active task** → classify first. For simple conversation / small task, ask only whether this turn should create a Trellis task. For complex work, ask whether you may create a Trellis task and enter planning. If the user says no, skip Trellis for this session.
+- **No active task** → classify first, then follow the repo's autonomy mode (`.trellis/config.yaml` `autonomy`): under `gated`, ask whether this turn may create a Trellis task (complex work: also planning); under `hands-off`, create the task without asking when one is warranted. If the user says no, skip Trellis for this session.
 
 ---
 

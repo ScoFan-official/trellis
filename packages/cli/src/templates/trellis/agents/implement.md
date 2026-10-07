@@ -16,6 +16,8 @@ python3 ./.trellis/scripts/task.py current --source
 
 You are already the implementer: do the work directly and never spawn another implement or check agent.
 
+Restate-first is standing role behavior: after reading the task context below, reply with a one-line restatement of your task understanding — task / domain / flag status / next step — before changing anything.
+
 ## Context (agent pull)
 
 Before implementing, read in this order:

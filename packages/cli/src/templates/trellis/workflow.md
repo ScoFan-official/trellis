@@ -147,16 +147,23 @@ python3 ./.trellis/scripts/get_context.py --mode phase --step <X.Y>  # detailed 
 ## Phase Index
 
 ```
-Phase 1: Plan    → classify, get task-creation consent, then write planning artifacts
+Phase 1: Plan    → classify + route to a domain, then write planning artifacts (consent gates per autonomy mode)
 Phase 2: Execute → implement only after task status is in_progress
 Phase 3: Finish  → verify, update spec, commit, and wrap up
 ```
 
 ### Request Triage
 
-- Simple conversation or small task: ask only whether this turn should create a Trellis task. If the user says no, skip Trellis for this session.
-- Complex task: ask whether you may create a Trellis task and enter planning. If the user says no, do not do broad inline implementation; explain, clarify scope, or suggest a smaller split.
-- User approval to create a task is not approval to start implementation. Planning still happens first.
+Autonomy mode comes from `.trellis/config.yaml` `autonomy: gated | hands-off` (default `hands-off`): `[B档]` lines apply under `gated` (ask the user at each gate); `[C档]` lines apply under `hands-off` (auto-pass the same gates — the user can veto afterwards). The always-stop list in Guardrails applies to both modes.
+
+- Simple conversation or small task:
+  - `[B档]` ask only whether this turn should create a Trellis task. If the user says no, skip Trellis for this session.
+  - `[C档]` create the task without asking when one is warranted — the task itself is the record.
+- Complex task:
+  - `[B档]` ask whether you may create a Trellis task and enter planning. If the user says no, do not do broad inline implementation; explain, clarify scope, or suggest a smaller split.
+  - `[C档]` create the task and enter planning directly; still explain scope and split oversized work.
+- Creating a task also routes it to a domain — scan `.trellis/domains/REGISTRY.md` first (full rule in step 1.0).
+- Consent to create a task is not approval to start implementation. Planning still happens first.
 
 ### Planning Artifacts
 
@@ -177,9 +184,9 @@ Create new children with `task.py create "<title>" --slug <name> --parent <paren
 <!-- Per-turn breadcrumb: shown when there is no active task (before Phase 1) -->
 
 [workflow-state:no_task]
-No active task. First classify the current turn and ask for task-creation consent before creating any Trellis task.
-Simple conversation / small task: ask only whether this turn should create a Trellis task. If the user says no, skip Trellis for this session.
-Complex task: ask the user if you can create a Trellis task and enter the planning phase. If the user says no, explain, clarify scope, or suggest a smaller split.
+No active task. First classify the current turn; a new task is also routed to a domain in the same step — scan `.trellis/domains/REGISTRY.md` before `task.py create` (match → `meta.domain`; no match → scaffold the domain + REGISTRY line in the same commit; truly domain-less → `Domain: none（reason）` in prd.md). Ownership unclear → stop and ask the user — this applies in BOTH modes.
+[B档] Ask for task-creation consent before creating any Trellis task — simple/small: ask only whether this turn should create one; complex: ask to create a task and enter planning. If the user says no, skip Trellis or clarify/split scope.
+[C档] Create the task and route it without asking — the task itself is the record; the user can veto afterwards. The classification and routing judgments still apply.
 [/workflow-state:no_task]
 
 <!-- Per-turn breadcrumb: shown when the active task record cannot be read. -->
@@ -202,7 +209,9 @@ Preserve existing task fields and artifacts. If the correct status cannot be det
 
 [workflow-state:planning]
 Load `trellis-brainstorm`; stay in planning.
-Lightweight: `prd.md` can be enough. Complex: finish `prd.md`, `design.md`, and `implement.md`; ask for review before `task.py start`.
+Lightweight: `prd.md` can be enough. Complex: finish `prd.md`, `design.md`, and `implement.md`.
+[B档] Ask for artifact review before `task.py start`.
+[C档] Run `task.py start` once artifacts are complete — review becomes after-the-fact veto; the user can still halt mid-work.
 Multi-deliverable scope: consider a parent task plus independently verifiable child tasks; dependencies must be written in child artifacts, not implied by tree position.
 Sub-agent mode: curate `implement.jsonl` and `check.jsonl` as spec/research manifests before start.
 [/workflow-state:planning]
@@ -215,7 +224,9 @@ Sub-agent mode: curate `implement.jsonl` and `check.jsonl` as spec/research mani
 
 [workflow-state:planning-inline]
 Load `trellis-brainstorm`; stay in planning.
-Lightweight: `prd.md` can be enough. Complex: finish `prd.md`, `design.md`, and `implement.md`; ask for review before `task.py start`.
+Lightweight: `prd.md` can be enough. Complex: finish `prd.md`, `design.md`, and `implement.md`.
+[B档] Ask for artifact review before `task.py start`.
+[C档] Run `task.py start` once artifacts are complete — review becomes after-the-fact veto; the user can still halt mid-work.
 Multi-deliverable scope: consider a parent task plus independently verifiable child tasks; dependencies must be written in child artifacts, not implied by tree position.
 Inline mode: skip jsonl curation; Phase 2 reads artifacts/specs via `trellis-before-dev`.
 [/workflow-state:planning-inline]
@@ -231,13 +242,16 @@ Inline mode: skip jsonl curation; Phase 2 reads artifacts/specs via `trellis-bef
      therefore must cover every required step from implementation through
      commit, including Phase 3.3 spec update and Phase 3.4 commit. -->
 
-Sub-agent dispatch protocol applies to all platforms and all sub-agents, including native Codex `SubagentStart` context injection with child-side pull fallback, class-2 Gemini/Qoder/Copilot/Reasonix/Trae/Grok/Kimi Code, hook-backed ZCode/Snow, and `trellis-research`: every dispatch prompt starts with `Active task: <task path from task.py current>` before role-specific instructions. On Grok Build, use `spawn_subagent` with `subagent_type` set to the Trellis agent name (e.g. `trellis-implement`). On Kimi Code, dispatch the built-in `coder` / `explore` sub-agent with the matching `.kimi-code/skills/trellis-<role>/SKILL.md` instructions.
+Sub-agent dispatch protocol applies to all platforms and all sub-agents, including native Codex `SubagentStart` context injection with child-side pull fallback, class-2 Gemini/Qoder/Copilot/Reasonix/Trae/Grok/Kimi Code, hook-backed ZCode/Snow, and `trellis-research`: every dispatch prompt starts with `Active task: <task path from task.py current>`, then a line requiring the agent to restate its task understanding in one line (task / domain / flag status / next step) after reading the task files and before making any change, then role-specific instructions. On Grok Build, use `spawn_subagent` with `subagent_type` set to the Trellis agent name (e.g. `trellis-implement`). On Kimi Code, dispatch the built-in `coder` / `explore` sub-agent with the matching `.kimi-code/skills/trellis-<role>/SKILL.md` instructions.
 
 [workflow-state:in_progress]
 Tools: `trellis-implement` / `trellis-research` are sub-agent types only (Task/Agent tool, NOT Skill; there is no skill by these names). `trellis-update-spec` is a skill. `trellis-check` exists as both; prefer the Agent form when verifying after code changes.
 Flow: `trellis-implement` -> `trellis-check` -> `trellis-update-spec` -> commit (Phase 3.4) -> `/trellis:finish-work`.
 Main-session default: dispatch implement/check sub-agents. Sub-agent self-exemption: if already running as `trellis-implement`, do NOT spawn another `trellis-implement` or `trellis-check`; if already running as `trellis-check`, do NOT spawn another `trellis-check` or `trellis-implement`. Dispatch is main session only.
-Dispatch prompt starts with `Active task: <task path from task.py current>`. Read context: jsonl entries -> `prd.md` -> `design.md if present` -> `implement.md if present`.
+Dispatch prompt starts with `Active task: <task path from task.py current>` + a restate-first line (the agent restates task / domain / flag status / next step in one line after reading, before changing anything). Read context: jsonl entries -> `prd.md` -> `design.md if present` -> `implement.md if present`.
+[B档] Phase 3.4 commit: present the batched plan and wait for one-shot confirmation; `/trellis:finish-work` stays user-invoked.
+[C档] Phase 3.4 commit: execute the plan directly and list it in the report for after-the-fact veto; run `/trellis:finish-work` yourself and report.
+Both modes: files you did not edit this session NEVER enter a commit — list them separately instead.
 [/workflow-state:in_progress]
 
 <!-- Per-turn breadcrumb: shown while status='in_progress' when
@@ -249,6 +263,9 @@ Dispatch prompt starts with `Active task: <task path from task.py current>`. Rea
 Flow: `trellis-before-dev` -> edit -> `trellis-check` -> validation -> `trellis-update-spec` -> commit (Phase 3.4) -> `/trellis:finish-work`.
 Do not dispatch implement/check sub-agents in inline mode.
 Read context: `prd.md` -> `design.md if present` -> `implement.md if present`, plus relevant spec/research loaded by skills.
+[B档] Phase 3.4 commit: present the batched plan and wait for one-shot confirmation; `/trellis:finish-work` stays user-invoked.
+[C档] Phase 3.4 commit: execute the plan directly and list it in the report for after-the-fact veto; run `/trellis:finish-work` yourself and report.
+Both modes: files you did not edit this session NEVER enter a commit — list them separately instead.
 [/workflow-state:in_progress-inline]
 
 ### Phase 3: Finish
@@ -268,7 +285,9 @@ Read context: `prd.md` -> `design.md if present` -> `implement.md if present`, p
      channel as the live blocks. -->
 
 [workflow-state:completed]
-Code committed. Run `/trellis:finish-work`; if dirty, return to Phase 3.4 first.
+Code committed. If dirty, return to Phase 3.4 first.
+[B档] Tell the user to run `/trellis:finish-work`.
+[C档] Run `/trellis:finish-work` yourself and report the archive + journal + push result.
 [/workflow-state:completed]
 
 ### Rules
@@ -301,9 +320,11 @@ When a user request matches one of these intents inside an active task, route fi
 
 ### Guardrails
 
-- Task creation approval is not implementation approval; implementation waits for `task.py start` after artifact review.
+- Task creation approval is not implementation approval; implementation waits for `task.py start` after artifact review (`[C档]` auto-passes the review gate — see Request Triage).
 - PRD-only is valid for lightweight tasks; complex tasks need `design.md` + `implement.md`.
 - Planning must be persisted to task artifacts; checks must run before reporting completion.
+- Always stop and ask the user in BOTH autonomy modes: destructive/irreversible operations; secrets, credentials, or real external side-effects (the routine finish-work `git push` to an existing remote excepted); an active (non-stale) construction flag conflict on a domain; unclear ownership — when you cannot name the domain.
+- An explicit user instruction to stop automation always overrides the autonomy mode — the verbal emergency stop wins over `autonomy: hands-off`.
 
 ### Loading Step Detail
 
@@ -318,14 +339,23 @@ python3 ./.trellis/scripts/get_context.py --mode phase --step <step>
 
 ## Phase 1: Plan
 
-Goal: classify the request, get task-creation consent when a task is needed, and produce the planning artifacts required before implementation.
+Goal: classify the request, route a new task to its domain, get task-creation consent when the mode requires it, and produce the planning artifacts required before implementation.
 
-#### 1.0 Create task `[required · once]`
+#### 1.0 Create task + route to a domain `[required · once]`
 
-Create the task directory only after task-creation consent. The command sets status to `planning`, writes `task.json`, creates a default `prd.md`, and auto-targets the new task when session identity is available:
+Classify and route in one step, then create the task directory (consent per autonomy mode: `[B档]` ask first; `[C档]` create — the user vetoes afterwards).
+
+**Domain routing (before `create`)** — scan `.trellis/domains/REGISTRY.md`, one line per domain:
+
+- A domain matches → pass `--meta domain=<slug>` to `task.py create` and write `Domain: .trellis/domains/<slug>/` at the top of `prd.md`.
+- No domain fits → scaffold one first: copy `.trellis/domains/_scaffold/` to `.trellis/domains/<slug>/` and append a `<slug>/ — <≤100-char purpose>` line to `REGISTRY.md`; the skeleton and the REGISTRY line land in the SAME commit. Then create the task. Slug is lowercase letters/digits/hyphens and must not semantically overlap an existing domain.
+- Genuinely domain-less (docs/worklog-only change, same-day throwaway probe, Trellis infra/meta work) → leave `meta.domain` empty and write `Domain: none（<one-line reason>）` at the top of `prd.md`.
+- **Ownership unclear → stop and ask the user** — a safety net, not a per-task gate; both autonomy modes stop here.
+
+The command sets status to `planning`, writes `task.json`, creates a default `prd.md`, and auto-targets the new task when session identity is available:
 
 ```bash
-python3 ./.trellis/scripts/task.py create "<task title>" --slug <name>
+python3 ./.trellis/scripts/task.py create "<task title>" --slug <name> --meta domain=<slug>
 ```
 
 `--slug` is the human-readable name only. Do **not** include the `MM-DD-` date prefix; `task.py create` adds that prefix automatically.
@@ -446,7 +476,8 @@ Skip this step. Context is loaded directly by the `trellis-before-dev` skill in 
 
 #### 1.4 Activate task `[required · once]`
 
-After artifact review, flip the task status to `in_progress`:
+- `[B档]` after artifact review — the user confirms — flip the task status to `in_progress`:
+- `[C档]` once the artifacts below are complete, run `start` without waiting — the review becomes an after-the-fact veto:
 
 ```bash
 python3 ./.trellis/scripts/task.py start <task-dir>
@@ -463,7 +494,8 @@ If `task.py start` errors with a session-identity message (no context key from h
 | Condition | Required |
 |------|:---:|
 | `prd.md` exists | ✅ |
-| User confirms task should enter implementation | ✅ |
+| `prd.md` carries a `Domain:` line (a `.trellis/domains/<slug>/` path or `none（reason）`) | ✅ |
+| `[B档]` User confirms task should enter implementation; `[C档]` auto-passes (veto afterwards) | ✅ |
 | `task.py start` has been run (status = in_progress) | ✅ |
 | `research/` has artifacts (complex tasks) | recommended |
 | `design.md` exists (complex tasks) | ✅ |
@@ -489,7 +521,7 @@ Spawn the implement sub-agent:
 
 - **Agent type**: `trellis-implement`
 - **Task description**: Implement the reviewed task artifacts, consulting materials under `{TASK_DIR}/research/`; finish by running project lint and type-check
-- **Dispatch prompt guard**: The prompt MUST start with `Active task: <task path>`, then tell the spawned agent it is already the `trellis-implement` sub-agent and must implement directly, not spawn another `trellis-implement` / `trellis-check`.
+- **Dispatch prompt guard**: The prompt MUST start with `Active task: <task path>`, then include the restate-first line — "After reading the task files, restate your task understanding in one line (task / domain / flag status / next step) before making any change" — then tell the spawned agent it is already the `trellis-implement` sub-agent and must implement directly, not spawn another `trellis-implement` / `trellis-check`.
 
 The platform hook/plugin auto-handles:
 - Reads `implement.jsonl` and injects referenced spec/research files into the agent prompt
@@ -504,7 +536,7 @@ Spawn the implement sub-agent:
 
 - **Agent type**: `trellis-implement`
 - **Task description**: Implement the reviewed task artifacts, consulting materials under `{TASK_DIR}/research/`; finish by running project lint and type-check
-- **Dispatch prompt guard**: The prompt MUST start with `Active task: <task path>`, then explicitly say the spawned agent is already `trellis-implement` and must implement directly without spawning another `trellis-implement` / `trellis-check`.
+- **Dispatch prompt guard**: The prompt MUST start with `Active task: <task path>`, then include the restate-first line — "After reading the task files, restate your task understanding in one line (task / domain / flag status / next step) before making any change" — then explicitly say the spawned agent is already `trellis-implement` and must implement directly without spawning another `trellis-implement` / `trellis-check`.
 
 The pull-based sub-agent definition auto-handles the context load requirement:
 - Resolves the active task with `task.py current --source`, then reads `prd.md`, `design.md` if present, and `implement.md` if present
@@ -518,7 +550,7 @@ Spawn the implement sub-agent:
 
 - **Agent type**: `trellis-implement`
 - **Task description**: Implement the reviewed task artifacts, consulting materials under `{TASK_DIR}/research/`; finish by running project lint and type-check
-- **Dispatch prompt guard**: Tell the spawned agent it is already the `trellis-implement` sub-agent and must implement directly, not spawn another `trellis-implement` / `trellis-check`.
+- **Dispatch prompt guard**: Tell the spawned agent it is already the `trellis-implement` sub-agent and must implement directly, not spawn another `trellis-implement` / `trellis-check`. Include the restate-first line — "After reading the task files, restate your task understanding in one line (task / domain / flag status / next step) before making any change".
 
 The platform prelude auto-handles the context load requirement:
 - Reads `implement.jsonl` and injects referenced spec/research files into the agent prompt
@@ -544,7 +576,7 @@ Spawn the check sub-agent:
 
 - **Agent type**: `trellis-check`
 - **Task description**: Review all code changes against specs and task artifacts; fix any findings directly; ensure lint and type-check pass
-- **Dispatch prompt guard**: The prompt MUST start with `Active task: <task path>`, then tell the spawned agent it is already the `trellis-check` sub-agent and must review/fix directly, not spawn another `trellis-check` / `trellis-implement`.
+- **Dispatch prompt guard**: The prompt MUST start with `Active task: <task path>`, then include the restate-first line — "After reading the task files, restate your task understanding in one line (task / domain / flag status / next step) before making any change" — then tell the spawned agent it is already the `trellis-check` sub-agent and must review/fix directly, not spawn another `trellis-check` / `trellis-implement`.
 
 The check agent's job:
 - Review code changes against specs
@@ -619,11 +651,11 @@ The AI drives a batched commit of this task's code changes so `/finish-work` can
 
 3. **Classify dirty files into two groups**:
    - **AI-edited this session** — files you wrote/edited via Edit/Write/Bash tool calls in this session. You know what changed and why.
-   - **Unrecognized** — dirty files you did NOT touch this session (could be the user's manual edits, leftover WIP from a previous session, or unrelated work). Do NOT silently include these.
+   - **Unrecognized** — dirty files you did NOT touch this session (could be the user's manual edits, leftover WIP from a previous session, or unrelated work). **Unrecognized files NEVER enter any commit — in both autonomy modes.** List them separately instead.
 
 4. **Draft a commit plan**. Group AI-edited files into logical commits (1 commit per coherent change unit, not 1 commit per file). Each entry: `<commit message>` + file list. List unrecognized files separately at the bottom.
 
-5. **Present the plan once, ask for one-shot confirmation**. Format:
+5. `[B档]` **Present the plan once, ask for one-shot confirmation**. `[C档]` Execute the plan directly — still list it in your report so the user can revert afterwards. Format:
    ```
    Proposed commits (in order):
      1. <message>
@@ -639,19 +671,20 @@ The AI drives a batched commit of this task's code changes so `/finish-work` can
    Reply 'ok' / '行' to execute. Reply with edits, or '我自己来' / 'manual' to abort.
    ```
 
-6. **On confirmation**: run `git add <files>` + `git commit -m "<msg>"` for each batch in order. Do not amend. Do not push.
+6. `[B档]` **On confirmation**: run `git add <files>` + `git commit -m "<msg>"` for each batch in order. `[C档]` Run the same batches immediately, no confirmation wait. Either way: do not amend. Do not push.
 
 7. **On rejection** (user replies "不行" / "我自己来" / "manual" / any pushback on the plan): stop. Do not attempt a second plan. The user will commit by hand; you skip ahead to 3.5 once they confirm.
 
 **Rules**:
 - No `git commit --amend` anywhere — three-stage three-commit flow (work commits → archive commit → journal commit).
-- Never push to remote in this step.
+- Never push to remote in this step — pushing belongs to the `/trellis:finish-work` bookkeeping pass.
 - If the user wants different message wording but accepts the file grouping, edit the message and re-confirm once — but if they reject the grouping, exit to manual mode.
 - The batched plan is one prompt; do not prompt per commit.
 
 #### 3.5 Wrap-up reminder
 
-After the above, remind the user they can run `/finish-work` to wrap up (archive the task, record the session).
+- `[B档]` After the above, remind the user they can run `/finish-work` to wrap up (archive the task, record the session, push if a remote exists).
+- `[C档]` Run `/finish-work` yourself once commits are clean, then report the archive + journal + push result; the user can veto afterwards.
 
 ---
 
@@ -662,7 +695,7 @@ This section is for developers who want to modify the Trellis workflow itself. A
 ### Changing what a step means
 
 Edit the corresponding step's walkthrough body in the Phase 1 / 2 / 3 sections above. Critical invariants:
-- No active task must triage first and ask for task-creation consent before creating a Trellis task.
+- No active task must triage first; task creation is routed to a domain in the same step and gated by consent only under `[B档]` (`autonomy: gated`).
 - Planning must distinguish lightweight PRD-only tasks from complex tasks that require `prd.md`, `design.md`, and `implement.md` before start.
 - Every required execution path must keep the Phase 3.4 commit reminder reachable before `/trellis:finish-work`.
 
