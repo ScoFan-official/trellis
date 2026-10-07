@@ -21,6 +21,8 @@ export const DIR_NAMES = {
   SCRIPTS: "scripts",
   /** Channel runtime agent definitions (under .trellis/) */
   AGENTS: "agents",
+  /** Domain-layer boards (under .trellis/) — user-data zone, scaffold-once */
+  DOMAINS: "domains",
 } as const;
 
 // File names
@@ -55,6 +57,8 @@ export const PATHS = {
   SCRIPTS: `${DIR_NAMES.WORKFLOW}/${DIR_NAMES.SCRIPTS}`,
   /** .trellis/agents/ */
   AGENTS: `${DIR_NAMES.WORKFLOW}/${DIR_NAMES.AGENTS}`,
+  /** .trellis/domains/ */
+  DOMAINS: `${DIR_NAMES.WORKFLOW}/${DIR_NAMES.DOMAINS}`,
   /** .trellis/.developer */
   DEVELOPER_FILE: `${DIR_NAMES.WORKFLOW}/${FILE_NAMES.DEVELOPER}`,
   /** .trellis/.current-task */

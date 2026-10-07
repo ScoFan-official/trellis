@@ -131,6 +131,7 @@ export function collectUncommittedTrellisData(cwd: string): string[] {
     `${w}/${DIR_NAMES.SPEC}`,
     `${w}/${DIR_NAMES.TASKS}`,
     `${w}/${DIR_NAMES.WORKSPACE}`,
+    `${w}/${DIR_NAMES.DOMAINS}`,
   ];
   try {
     const out = execFileSync(

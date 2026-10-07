@@ -7,3 +7,11 @@
 # picking either side (task state lives in task.json, not index.md). See
 # .trellis/spec/cli/backend/directory-structure.md for details.
 .trellis/workspace/*/journal-*.md merge=union
+
+# Trellis: the domain REGISTRY and per-writer domain worklogs are shared
+# append surfaces across parallel writers — union-merge keeps every line.
+# Domain READMEs (flag/progress), NN-*/BOUNDARY/review files are deliberately
+# NOT union-merged: a real conflict there is a true signal (e.g. a flag
+# collision must not be silently absorbed).
+.trellis/domains/REGISTRY.md merge=union
+.trellis/domains/*/worklog/*.md merge=union

@@ -55,6 +55,24 @@ describe("journal-*.md merge=union gitattributes rule", () => {
       "# Index\n\n@@@auto:current-status\n- Total Sessions: 1\n@@@/auto:current-status\n",
     );
 
+    // Domain-layer append surfaces covered by merge=union.
+    const domainWorklogDir = path.join(
+      tmp,
+      ".trellis",
+      "domains",
+      "board",
+      "worklog",
+    );
+    fs.mkdirSync(domainWorklogDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(domainWorklogDir, "devin-MACHINE-subagent.md"),
+      "# worklog — devin-MACHINE-subagent\n\nbase entry\n",
+    );
+    fs.writeFileSync(
+      path.join(tmp, ".trellis", "domains", "REGISTRY.md"),
+      "# REGISTRY\n\nbase-line/\n",
+    );
+
     gitOk(tmp, "add", "-A");
     gitOk(tmp, "commit", "-q", "-m", "base");
   });
@@ -95,6 +113,42 @@ describe("journal-*.md merge=union gitattributes rule", () => {
     expect(merged).toContain("branch-b work");
     expect(merged).not.toContain("<<<<<<<");
     expect(merged).not.toContain(">>>>>>>");
+  });
+
+  it("merges parallel appends to domain worklog and REGISTRY cleanly (no conflict markers)", () => {
+    const worklogPath = path.join(
+      tmp,
+      ".trellis",
+      "domains",
+      "board",
+      "worklog",
+      "devin-MACHINE-subagent.md",
+    );
+    const registryPath = path.join(tmp, ".trellis", "domains", "REGISTRY.md");
+
+    gitOk(tmp, "checkout", "-q", "-b", "branch-a");
+    fs.appendFileSync(worklogPath, "\n## entry from branch-a\n");
+    fs.appendFileSync(registryPath, "board-a/ — from branch-a\n");
+    gitOk(tmp, "commit", "-aq", "-m", "domain appends on branch-a");
+
+    gitOk(tmp, "checkout", "-q", "main");
+    gitOk(tmp, "checkout", "-q", "-b", "branch-b");
+    fs.appendFileSync(worklogPath, "\n## entry from branch-b\n");
+    fs.appendFileSync(registryPath, "board-b/ — from branch-b\n");
+    gitOk(tmp, "commit", "-aq", "-m", "domain appends on branch-b");
+
+    const merge = git(tmp, "merge", "branch-a", "--no-edit");
+    expect(merge.status).toBe(0);
+
+    const mergedWorklog = fs.readFileSync(worklogPath, "utf-8");
+    expect(mergedWorklog).toContain("entry from branch-a");
+    expect(mergedWorklog).toContain("entry from branch-b");
+    expect(mergedWorklog).not.toContain("<<<<<<<");
+
+    const mergedRegistry = fs.readFileSync(registryPath, "utf-8");
+    expect(mergedRegistry).toContain("board-a/");
+    expect(mergedRegistry).toContain("board-b/");
+    expect(mergedRegistry).not.toContain("<<<<<<<");
   });
 
   it("still produces a normal git conflict on index.md for the same parallel-edit scenario", () => {

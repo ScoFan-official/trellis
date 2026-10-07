@@ -5,6 +5,7 @@ import {
   collectPlatformTemplates,
   PLATFORM_IDS,
 } from "../../src/configurators/index.js";
+import { MERGE_UNION_RULES } from "../../src/configurators/workflow.js";
 import type { AITool } from "../../src/types/ai-tools.js";
 import {
   scriptsInit,
@@ -25,6 +26,11 @@ import {
   gitignoreTemplate,
   getAllScripts,
   getAllAgents,
+  getAllDomainFiles,
+  domainRegistryTemplate,
+  gitattributesTemplate,
+  domainDisciplineTemplate,
+  domainWorklogProtocolTemplate,
   implementAgentTemplate,
   checkAgentTemplate,
   configYamlTemplate,
@@ -422,6 +428,61 @@ describe("getAllAgents", () => {
         nameLine?.split(":")[1]?.trim(),
         `${file} name field should equal "${expectedName}"`,
       ).toBe(expectedName);
+    }
+  });
+});
+
+// =============================================================================
+// getAllDomainFiles — domain-layer scaffold seeded once under .trellis/domains/.
+// These files are user data after init (update never rewrites them; see the
+// PROTECTED_PATHS coverage in update.ts), so the contract pinned here is only
+// that the map carries the expected seed set.
+// =============================================================================
+
+describe("getAllDomainFiles", () => {
+  it("returns a Map", () => {
+    expect(getAllDomainFiles()).toBeInstanceOf(Map);
+  });
+
+  it("contains expected domain scaffold entries", () => {
+    const files = getAllDomainFiles();
+    expect(files.has("REGISTRY.md")).toBe(true);
+    expect(files.has("DISCIPLINE.md")).toBe(true);
+    expect(files.has("WORKLOG-PROTOCOL.md")).toBe(true);
+    expect(files.has("_scaffold/README.md")).toBe(true);
+    expect(files.has("_scaffold/BOUNDARY.md")).toBe(true);
+    expect(files.has("_scaffold/worklog/.gitkeep")).toBe(true);
+    expect(files.has("_scaffold/review/.gitkeep")).toBe(true);
+  });
+
+  it("values match the exported constants", () => {
+    const files = getAllDomainFiles();
+    expect(files.get("REGISTRY.md")).toBe(domainRegistryTemplate);
+    expect(files.get("DISCIPLINE.md")).toBe(domainDisciplineTemplate);
+    expect(files.get("WORKLOG-PROTOCOL.md")).toBe(
+      domainWorklogProtocolTemplate,
+    );
+  });
+
+  it("all non-.gitkeep values are non-empty strings", () => {
+    const files = getAllDomainFiles();
+    for (const [key, value] of files) {
+      if (key.endsWith(".gitkeep")) {
+        continue;
+      }
+      expect(value.length, `${key} should be non-empty`).toBeGreaterThan(0);
+    }
+  });
+});
+
+describe("gitattributes merge=union rules", () => {
+  it("every MERGE_UNION_RULES line exists verbatim in the template", () => {
+    for (const rule of MERGE_UNION_RULES) {
+      expect(
+        gitattributesTemplate,
+        `rule.line missing from gitattributes.txt: ${rule.line}`,
+      ).toContain(rule.line);
+      expect(rule.pattern.test(rule.line)).toBe(true);
     }
   });
 });

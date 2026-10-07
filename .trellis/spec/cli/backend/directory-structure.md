@@ -443,10 +443,12 @@ files there behave differently on merge, and this is intentional:
   `task.json`, not in the workspace index.
 
 `ensureGitattributes()` (`packages/cli/src/configurators/workflow.ts`) writes
-this rule additively — it is called from both `trellis init` and
-`trellis update`, never overwrites an existing project-root `.gitattributes`
-wholesale, and is a no-op if a `journal-*.md merge=union` rule already exists
-(user-authored or from a previous run).
+the `merge=union` rules additively — journal files plus the domain
+`REGISTRY.md` and per-writer domain worklogs (`MERGE_UNION_RULES`). It is
+called from both `trellis init` and `trellis update`, never overwrites an
+existing project-root `.gitattributes` wholesale, and appends only the rules
+that are missing (a rule already present — user-authored or from a previous
+run — is left alone).
 
 `add_session.py` prints a one-time-per-process warning (stderr, non-blocking)
 when it detects it is running inside a git worktree (not the main working

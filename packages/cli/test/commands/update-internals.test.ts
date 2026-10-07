@@ -253,6 +253,13 @@ describe("shouldExcludeFromBackup", () => {
     );
   });
 
+  it("excludes domain boards/REGISTRY/worklogs (user data)", () => {
+    expect(shouldExcludeFromBackup(".trellis/domains/REGISTRY.md")).toBe(true);
+    expect(
+      shouldExcludeFromBackup(".trellis/domains/deap/worklog/dev.md"),
+    ).toBe(true);
+  });
+
   it.each([
     ".opencode/node_modules/@opencode-ai/sdk/package.json",
     ".trellis/.backup-2026-04-22T10-24-27/.opencode/node_modules/zod/index.js",

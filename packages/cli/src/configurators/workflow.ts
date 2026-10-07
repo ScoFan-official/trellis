@@ -11,6 +11,7 @@ import {
   gitignoreTemplate,
   gitattributesTemplate,
   getAllAgents,
+  getAllDomainFiles,
 } from "../templates/trellis/index.js";
 
 // Import markdown templates
@@ -74,20 +75,39 @@ export interface WorkflowOptions {
 }
 
 /**
- * Regex used to detect an existing `journal-*.md merge=union` gitattributes
- * rule (any whitespace variant), so `ensureGitattributes` never appends a
+ * Required `merge=union` rules and the regexes used to detect their presence
+ * (any whitespace variant), so `ensureGitattributes` never appends a
  * duplicate entry to a project's pre-existing `.gitattributes`.
+ *
+ * Journal files, the domain REGISTRY and per-writer domain worklogs are all
+ * append-only surfaces that must merge cleanly across parallel writers.
  */
-const JOURNAL_MERGE_UNION_PATTERN = /journal-\*\.md\s+merge=union/;
+export const MERGE_UNION_RULES: readonly { pattern: RegExp; line: string }[] = [
+  {
+    pattern: /journal-\*\.md\s+merge=union/,
+    line: ".trellis/workspace/*/journal-*.md merge=union",
+  },
+  {
+    pattern: /\.trellis\/domains\/REGISTRY\.md\s+merge=union/,
+    line: ".trellis/domains/REGISTRY.md merge=union",
+  },
+  {
+    pattern: /\.trellis\/domains\/\*\/worklog\/\*\.md\s+merge=union/,
+    line: ".trellis/domains/*/worklog/*.md merge=union",
+  },
+];
 
 /**
- * Ensure the project-root `.gitattributes` carries the journal `merge=union`
- * rule, without ever overwriting a user's existing file wholesale.
+ * Ensure the project-root `.gitattributes` carries every `merge=union` rule
+ * Trellis needs, without ever overwriting a user's existing file wholesale.
  *
  * - No `.gitattributes` yet: write the bundled template directly.
- * - Existing file that already has a `journal-*.md merge=union` rule (user's
- *   own or from a previous `trellis init`/`update`): no-op, avoids duplicates.
- * - Existing file without that rule: append the bundled template content.
+ * - Existing file missing all rules: append the bundled template content
+ *   (keeps the comment block context), matching the historical behavior.
+ * - Existing file missing only some rules (e.g. a project that predates the
+ *   domain rules): append just the missing rule lines so the file converges
+ *   without rewriting or duplicating user content.
+ * - Existing file that already has every rule: no-op.
  *
  * Intentionally does NOT go through the standard `writeFile` conflict-prompt
  * flow — this file is additive-only and never a candidate for whole-file
@@ -102,12 +122,19 @@ export function ensureGitattributes(cwd: string): void {
   }
 
   const existing = fs.readFileSync(targetPath, "utf-8");
-  if (JOURNAL_MERGE_UNION_PATTERN.test(existing)) {
+  const missing = MERGE_UNION_RULES.filter(
+    (rule) => !rule.pattern.test(existing),
+  );
+  if (missing.length === 0) {
     return;
   }
 
+  const addition =
+    missing.length === MERGE_UNION_RULES.length
+      ? gitattributesTemplate
+      : missing.map((rule) => rule.line).join("\n") + "\n";
   const separator = existing.endsWith("\n") ? "\n" : "\n\n";
-  fs.writeFileSync(targetPath, existing + separator + gitattributesTemplate);
+  fs.writeFileSync(targetPath, existing + separator + addition);
 }
 
 /**
@@ -161,9 +188,23 @@ export async function createWorkflowStructure(
     configYamlTemplate,
   );
 
-  // Ensure project-root .gitattributes carries the journal merge=union rule
+  // Ensure project-root .gitattributes carries the merge=union rules
   // (additive-only — never overwrites a user's existing file wholesale).
   ensureGitattributes(cwd);
+
+  // Seed the domain-layer scaffold (.trellis/domains/**) — scaffold-once:
+  // only paths missing on disk are written. `.trellis/domains/**` is a
+  // user-data zone (also listed in update's PROTECTED_PATHS); anything
+  // already present — boards, worklogs, appended registry lines — is user
+  // data that must never be compared, prompted on, or overwritten.
+  for (const [domainFile, content] of getAllDomainFiles()) {
+    const dest = path.join(cwd, PATHS.DOMAINS, ...domainFile.split("/"));
+    if (fs.existsSync(dest)) {
+      continue;
+    }
+    ensureDir(path.dirname(dest));
+    await writeFile(dest, content);
+  }
 
   // Dispatch channel runtime agent definitions. These are platform-agnostic
   // Trellis runtime files consumed by `trellis channel spawn --agent <name>`

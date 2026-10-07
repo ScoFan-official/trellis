@@ -12,6 +12,7 @@
  *   │   └── *.py              # Main scripts (Python)
  *   ├── agents/                # Channel runtime agent definitions
  *   │   └── *.md               # Loaded by `trellis channel spawn --agent <name>`
+ *   ├── domains/               # Domain-layer scaffold (seed-once user data)
  *   ├── scripts-shell-archive/ # Archived shell scripts (for reference)
  *   ├── workflow.md           # Workflow guide
  *   ├── config.yaml            # Trellis configuration
@@ -88,6 +89,30 @@ export const gitattributesTemplate = readTemplate("gitattributes.txt");
 export const implementAgentTemplate = readTemplate("agents/implement.md");
 export const checkAgentTemplate = readTemplate("agents/check.md");
 
+// Domain-layer scaffold files (dispatched under `.trellis/domains/`).
+// `.trellis/domains/**` is a user-data zone: `trellis update` seeds these
+// files only when missing and never manages, overwrites, or prompts on
+// existing domain content (see `update.ts` collectTemplateFiles +
+// PROTECTED_PATHS). `_scaffold/` is the per-domain skeleton agents copy when
+// creating a new board — it is infra, not a board.
+export const domainRegistryTemplate = readTemplate("domains/REGISTRY.md");
+export const domainDisciplineTemplate = readTemplate("domains/DISCIPLINE.md");
+export const domainWorklogProtocolTemplate = readTemplate(
+  "domains/WORKLOG-PROTOCOL.md",
+);
+export const domainScaffoldReadmeTemplate = readTemplate(
+  "domains/_scaffold/README.md",
+);
+export const domainScaffoldBoundaryTemplate = readTemplate(
+  "domains/_scaffold/BOUNDARY.md",
+);
+export const domainScaffoldWorklogGitkeepTemplate = readTemplate(
+  "domains/_scaffold/worklog/.gitkeep",
+);
+export const domainScaffoldReviewGitkeepTemplate = readTemplate(
+  "domains/_scaffold/review/.gitkeep",
+);
+
 /**
  * Get all script templates as a map of relative path to content
  */
@@ -143,4 +168,24 @@ export function getAllAgents(): Map<string, string> {
   agents.set("implement.md", implementAgentTemplate);
   agents.set("check.md", checkAgentTemplate);
   return agents;
+}
+
+/**
+ * Get all domain-layer scaffold files as a map of relative path (under
+ * `.trellis/domains/`) to content.
+ *
+ * Consumed by `trellis init` (workflow configurator) and `trellis update`
+ * (`collectTemplateFiles`). Both callers apply seed-once semantics: a path
+ * that already exists on disk is user data and is never offered for write.
+ */
+export function getAllDomainFiles(): Map<string, string> {
+  const files = new Map<string, string>();
+  files.set("REGISTRY.md", domainRegistryTemplate);
+  files.set("DISCIPLINE.md", domainDisciplineTemplate);
+  files.set("WORKLOG-PROTOCOL.md", domainWorklogProtocolTemplate);
+  files.set("_scaffold/README.md", domainScaffoldReadmeTemplate);
+  files.set("_scaffold/BOUNDARY.md", domainScaffoldBoundaryTemplate);
+  files.set("_scaffold/worklog/.gitkeep", domainScaffoldWorklogGitkeepTemplate);
+  files.set("_scaffold/review/.gitkeep", domainScaffoldReviewGitkeepTemplate);
+  return files;
 }

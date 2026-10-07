@@ -1122,7 +1122,7 @@ describe("update() integration", () => {
     expect(content).toContain(".trellis/workspace/*/journal-*.md merge=union");
   });
 
-  it("#15b does not duplicate an existing user journal merge=union rule (#415)", async () => {
+  it("#15b does not duplicate an existing user journal merge=union rule; backfills only missing domain rules (#415)", async () => {
     await setupProject();
 
     const gitattributesPath = path.join(tmpDir, ".gitattributes");
@@ -1132,7 +1132,92 @@ describe("update() integration", () => {
 
     await update({ force: true });
 
-    expect(fs.readFileSync(gitattributesPath, "utf-8")).toBe(userContent);
+    // The user's own journal rule is left untouched (no duplicate); only the
+    // missing merge=union rules are appended, additively.
+    expect(fs.readFileSync(gitattributesPath, "utf-8")).toBe(
+      userContent +
+        "\n" +
+        ".trellis/domains/REGISTRY.md merge=union\n" +
+        ".trellis/domains/*/worklog/*.md merge=union\n",
+    );
+  });
+
+  it("#15c domain scaffold files are seeded at init and preserved verbatim by update", async () => {
+    await setupProject();
+
+    const registryPath = projectFile(`${PATHS.DOMAINS}/REGISTRY.md`);
+    const scaffoldReadmePath = projectFile(
+      `${PATHS.DOMAINS}/_scaffold/README.md`,
+    );
+    expect(fs.existsSync(registryPath)).toBe(true);
+    expect(fs.existsSync(scaffoldReadmePath)).toBe(true);
+    expect(
+      fs.existsSync(projectFile(`${PATHS.DOMAINS}/DISCIPLINE.md`)),
+    ).toBe(true);
+    expect(
+      fs.existsSync(projectFile(`${PATHS.DOMAINS}/WORKLOG-PROTOCOL.md`)),
+    ).toBe(true);
+    expect(
+      fs.existsSync(
+        projectFile(`${PATHS.DOMAINS}/_scaffold/worklog/.gitkeep`),
+      ),
+    ).toBe(true);
+
+    // User data: register a board — update must never touch it.
+    const userContent =
+      fs.readFileSync(registryPath, "utf-8") + "my-board/ — 用户自有板块\n";
+    fs.writeFileSync(registryPath, userContent);
+    const scaffoldContent = fs.readFileSync(scaffoldReadmePath, "utf-8");
+
+    await update({ force: true });
+
+    expect(fs.readFileSync(registryPath, "utf-8")).toBe(userContent);
+    expect(fs.readFileSync(scaffoldReadmePath, "utf-8")).toBe(scaffoldContent);
+  });
+
+  it("#15d user-deleted domain scaffold file is not re-seeded by update", async () => {
+    await setupProject();
+
+    const scaffoldReadmePath = projectFile(
+      `${PATHS.DOMAINS}/_scaffold/README.md`,
+    );
+    fs.rmSync(scaffoldReadmePath);
+
+    await update({ force: true });
+
+    // Deletion respected — the recorded hash marks it as previously
+    // installed, so it lands in userDeletedFiles ("preserved").
+    expect(fs.existsSync(scaffoldReadmePath)).toBe(false);
+  });
+
+  it("#15e legacy project without domain scaffold gets missing files backfilled", async () => {
+    await setupProject();
+
+    // Simulate a project installed before the domain layer shipped:
+    // no files on disk and no recorded hashes.
+    fs.rmSync(projectFile(PATHS.DOMAINS), { recursive: true });
+    const hashFile = hashFilePath();
+    let hashes = readHashesV2(hashFile);
+    for (const key of Object.keys(hashes)) {
+      if (key.startsWith(`${PATHS.DOMAINS}/`)) {
+        hashes = removeHashEntry(hashes, key) as Record<string, string>;
+      }
+    }
+    writeHashesV2(hashFile, hashes);
+
+    await update({ force: true });
+
+    expect(fs.existsSync(projectFile(`${PATHS.DOMAINS}/REGISTRY.md`))).toBe(
+      true,
+    );
+    expect(
+      fs.existsSync(projectFile(`${PATHS.DOMAINS}/_scaffold/BOUNDARY.md`)),
+    ).toBe(true);
+    expect(
+      fs.existsSync(
+        projectFile(`${PATHS.DOMAINS}/_scaffold/review/.gitkeep`),
+      ),
+    ).toBe(true);
   });
 
   it("#16 config.yaml update.skip prevents file from being updated", async () => {

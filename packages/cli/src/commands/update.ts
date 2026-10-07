@@ -47,6 +47,7 @@ import { emptyTaskJson } from "../utils/task-json.js";
 import {
   getAllScripts,
   getAllAgents,
+  getAllDomainFiles,
   // Configuration
   configYamlTemplate,
   gitignoreTemplate,
@@ -130,10 +131,14 @@ const LEGACY_UNTRACKED_AGENTS_MD_BLOCK_HASHES = new Set<string>([
 
 // Paths that should never be touched (true user data)
 // spec/ is user-customized content created during init; update should never modify it
+// domains/ is the domain-layer user-data zone: `trellis update` only seeds
+// missing scaffold files (see collectTemplateFiles) and must never manage,
+// overwrite, migrate, or delete anything already present.
 const PROTECTED_PATHS = [
   `${DIR_NAMES.WORKFLOW}/${DIR_NAMES.WORKSPACE}`, // workspace/
   `${DIR_NAMES.WORKFLOW}/${DIR_NAMES.TASKS}`, // tasks/
   `${DIR_NAMES.WORKFLOW}/${DIR_NAMES.SPEC}`, // spec/
+  `${DIR_NAMES.WORKFLOW}/${DIR_NAMES.DOMAINS}`, // domains/
   `${DIR_NAMES.WORKFLOW}/.developer`,
   `${DIR_NAMES.WORKFLOW}/.current-task`,
 ];
@@ -894,6 +899,21 @@ async function collectTemplateFiles(
     files.set(`${PATHS.AGENTS}/${agentFile}`, content);
   }
 
+  // Domain-layer scaffold seed files (.trellis/domains/**). Scaffold-once:
+  // only paths missing on disk are offered — anything already present is
+  // user data (boards, worklogs, appended registry lines) that update must
+  // never compare, prompt on, or overwrite. Dropping existing files here
+  // keeps them out of analyzeChanges entirely; a deleted scaffold file keeps
+  // its recorded hash and lands in userDeletedFiles ("preserved"), so a
+  // user's deletion is respected rather than silently re-seeded.
+  // `.trellis/domains` is also listed in PROTECTED_PATHS.
+  for (const [domainFile, content] of getAllDomainFiles()) {
+    const relativePath = `${PATHS.DOMAINS}/${domainFile}`;
+    if (!fs.existsSync(path.join(cwd, relativePath))) {
+      files.set(relativePath, content);
+    }
+  }
+
   // Configuration
   files.set(
     `${DIR_NAMES.WORKFLOW}/config.yaml`,
@@ -965,8 +985,11 @@ async function collectTemplateFiles(
     }
   }
 
-  // Apply python3→python replacement for Windows consistency with init-time writes
+  // Apply python3→python replacement for Windows consistency with init-time
+  // writes. Domain files are seeded verbatim at init (raw write, no literal
+  // rewrite), so skip them here to keep update-seeded bytes identical.
   for (const [filePath, content] of files) {
+    if (filePath.startsWith(`${PATHS.DOMAINS}/`)) continue;
     files.set(filePath, replacePythonCommandLiterals(content));
   }
 
@@ -1283,6 +1306,7 @@ const BACKUP_EXCLUDE_PATTERNS = [
   "/spec/", // Spec files (user-customized content)
   "/backlog/", // Backlog data (user data)
   "/agent-traces/", // Agent traces (user data, legacy name)
+  "/domains/", // Domain boards, REGISTRY, worklogs (user data)
   // Platform-native worktree dirs — these are full sub-repos the CLI
   // spawns for parallel sessions. Backing them up on every update would
   // snapshot the entire nested working tree. Confirmed conventions:
@@ -2431,7 +2455,7 @@ export async function update(options: UpdateOptions): Promise<void> {
     );
   }
 
-  // Ensure project-root .gitattributes carries the journal merge=union rule.
+  // Ensure project-root .gitattributes carries the merge=union rules.
   // Additive-only (see ensureGitattributes) — runs regardless of whether
   // other template files changed, so it must sit before the "nothing to do"
   // early-return below. Never touches disk in --dry-run.
