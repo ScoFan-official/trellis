@@ -4,11 +4,11 @@
 Task Management Script.
 
 Usage:
-    python3 task.py create "<title>" --description "<desc>" [--slug <name>] [--assignee <dev>] [--priority P0|P1|P2|P3] [--parent <dir>] [--package <pkg>] [--no-start] [--force]
+    python3 task.py create "<title>" --description "<desc>" [--slug <name>] [--assignee <dev>] [--priority P0|P1|P2|P3] [--parent <dir>] [--package <pkg>] [--domain <slug>] [--no-start] [--force]
     python3 task.py add-context <dir> <file> <path> [reason] # Add jsonl entry
     python3 task.py validate <dir>              # Validate jsonl files
     python3 task.py list-context <dir>          # List jsonl entries
-    python3 task.py start <dir>                 # Set active task, record current branch
+    python3 task.py start <dir> [--domain <slug>]  # Set active task; refuses a fresh foreign domain flag
     python3 task.py current [--source] [--json] # Show active task
     python3 task.py finish                      # Clear active task
     python3 task.py set-branch <dir> <branch>   # Set git branch
@@ -41,6 +41,7 @@ from common.paths import (
     get_tasks_dir,
     get_current_task,
 )
+from common import clai_delta
 from common.active_task import (
     clear_active_task,
     resolve_active_task,
@@ -232,6 +233,39 @@ def cmd_start(args: argparse.Namespace) -> int:
 
     task_json_path = full_path / FILE_TASK_JSON
 
+    # CLAI-1: `--domain <slug>` sugar — the same meta.domain write set-meta
+    # does, applied before the flag gate so a refused start still records the
+    # routing decision the caller asked for.
+    if getattr(args, "domain", None) and not clai_delta.set_task_domain(
+        task_json_path, args.domain
+    ):
+        return 1
+
+    # CLAI-2: a fresh foreign construction flag (旗) on the task's domain
+    # board hard-refuses start — the only mechanical gate in the flag
+    # protocol. Own flag, stale flag (>24h), and unresolvable boards proceed.
+    domain_slug = clai_delta.read_task_domain(task_json_path)
+    conflict = clai_delta.flag_conflict(repo_root, domain_slug)
+    if conflict is not None:
+        print(
+            colored(
+                f"Error: 板块 {domain_slug} 有他人施工旗（fresh）——start 拒绝。",
+                Colors.RED,
+            ),
+            file=sys.stderr,
+        )
+        print(f"  旗: {conflict.raw}", file=sys.stderr)
+        print(
+            f"  写者: {conflict.writer or '?'} · "
+            f"上下文: {conflict.context or '?'} · 自 {conflict.since_text}",
+            file=sys.stderr,
+        )
+        print(
+            "  撞旗纪律：向用户报告谁/自何时/在哪个上下文施工并等指示，不代拔不绕旗。",
+            file=sys.stderr,
+        )
+        return 1
+
     if not resolve_context_key():
         # Degraded mode: no session identity available.
         # Hook didn't inject TRELLIS_CONTEXT_ID (common on Windows + Claude Code,
@@ -289,6 +323,9 @@ def cmd_finish(args: argparse.Namespace) -> int:
     print(f"Source: {active.source}")
 
     if task_json_path.is_file():
+        # CLAI-4: our own flag still planted on the domain board → warn only;
+        # finish never deletes the flag and never blocks.
+        clai_delta.warn_if_own_flag(repo_root, task_json_path)
         run_task_hooks("after_finish", task_json_path, repo_root)
     return 0
 
@@ -656,6 +693,10 @@ def main() -> int:
         help="Task metadata key=value (repeatable)",
     )
     p_create.add_argument(
+        "--domain",
+        help="Domain board slug — sugar for --meta domain=<slug>",
+    )
+    p_create.add_argument(
         "--no-start",
         action="store_true",
         help="Create the task without making it active in this session",
@@ -684,6 +725,10 @@ def main() -> int:
     # start
     p_start = subparsers.add_parser("start", help="Set active task")
     p_start.add_argument("dir", help="Task directory")
+    p_start.add_argument(
+        "--domain",
+        help="Domain board slug — writes meta.domain before starting",
+    )
     p_start.add_argument(
         "--allow-empty-context",
         action="store_true",

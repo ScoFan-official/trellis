@@ -25,6 +25,7 @@ import argparse
 import json
 from pathlib import Path
 
+from . import clai_delta
 from .config import get_context_injection_limits
 from .git import branch_exists_locally
 from .io import read_json
@@ -188,6 +189,13 @@ def cmd_validate(args: argparse.Namespace) -> int:
         jsonl_file = target_dir / jsonl_name
         errors = _validate_jsonl(jsonl_file, repo_root, target_dir)
         total_errors += errors
+
+    # CLAI-3: domains/ dir ↔ REGISTRY.md reconciliation (mechanical,
+    # bidirectional). The check is repo-wide but lives in `validate` — the
+    # flag protocol's only lint seam — instead of a new `domains` command.
+    for problem in clai_delta.reconcile_domain_registry(repo_root):
+        print(f"  {colored(problem, Colors.RED)}")
+        total_errors += 1
 
     print()
     if total_errors == 0:

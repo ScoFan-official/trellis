@@ -24,6 +24,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
+from . import clai_delta
 from .config import (
     get_codex_dispatch_mode,
     get_packages,
@@ -358,6 +359,24 @@ def cmd_create(args: argparse.Namespace) -> int:
     meta = _parse_meta_pairs(getattr(args, "meta", None))
     if meta is None:
         return 1
+
+    # CLAI-1: --domain <slug> is sugar for --meta domain=<slug> — the explicit
+    # flag wins over an in-pairs `domain=` key. Slug shape is checked here so a
+    # bad value never reaches task.json; board existence is NOT required (the
+    # flag gate at start only fires when the slug resolves to a real board).
+    domain = getattr(args, "domain", None)
+    if domain is not None:
+        if not clai_delta.domain_slug_ok(domain):
+            print(
+                colored(
+                    f"Error: --domain must be a lowercase board slug "
+                    f"(a-z, 0-9, '-'): {domain}",
+                    Colors.RED,
+                ),
+                file=sys.stderr,
+            )
+            return 1
+        meta["domain"] = domain
 
     # Validate --package (CLI source: fail-fast)
     package: str | None = getattr(args, "package", None)
@@ -1436,6 +1455,10 @@ def cmd_archive(args: argparse.Namespace) -> int:
         archive_dest = Path(result["archived_to"])
         year_month = archive_dest.parent.name
         print(colored(f"Archived: {dir_name} -> archive/{year_month}/", Colors.GREEN), file=sys.stderr)
+
+        # CLAI-4: our own flag still planted on the domain board → warn only;
+        # archive never deletes the flag and never blocks.
+        clai_delta.warn_if_own_flag(repo_root, archive_dest / FILE_TASK_JSON)
 
         # Auto-commit unless --no-commit
         if not getattr(args, "no_commit", False):

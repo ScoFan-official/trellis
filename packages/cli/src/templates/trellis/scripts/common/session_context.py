@@ -21,6 +21,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from . import clai_delta
 from .active_task import resolve_context_key
 from .config import get_git_packages
 from .git import run_git
@@ -722,6 +723,11 @@ def get_context_text(repo_root: Path | None = None) -> str:
     else:
         lines.append("No journal file found")
     lines.append("")
+
+    # CLAI-5/6: autonomy mode line + 当前战线 domain section. The mode line
+    # is emitted unconditionally (gated|hands-off drives B/C档 gate text);
+    # the battle lines appear only when the repo uses the domains layer.
+    clai_delta.append_domain_context(lines, repo_root)
 
     # Packages
     packages_text = get_packages_section(repo_root)
