@@ -14,4 +14,12 @@ git submodule update --init marketplace
 # and required manually repairing every worktree's core.worktree/core.bare.
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY
 
-pnpm test
+# Known Windows-only env failures (missing python3 binary, chmod/posix path
+# assertions) make the full suite permanently red on some dev hosts. Prefer
+# this explicit escape over `--no-verify` so lint-staged + the submodule pin
+# above still run; CI on Linux remains the real gate.
+if [ -n "$SKIP_TEST_SUITE" ]; then
+  echo "SKIP_TEST_SUITE set — skipping pnpm test; CI still runs the full suite."
+else
+  pnpm test
+fi

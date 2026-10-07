@@ -63,3 +63,5 @@ This project is indexed by GitNexus as **Trellis** (14336 symbols, 20870 relatio
 | Index, status, clean, wiki CLI commands | `.claude/skills/gitnexus/gitnexus-cli/SKILL.md` |
 
 <!-- gitnexus:end -->
+
+> GitNexus index absent on this machine (`gitnexus list` returns nothing, no `.gitnexus/`)? The `impact` / `detect_changes` gates above degrade to per-file diff review plus spec-boundary checks — record the degraded check in the worklog rather than claiming a gate that did not run.

@@ -46,6 +46,16 @@ trellis init -r gh:ScoFan-official/oh-my-trellis -t agent-workflow --append
 
 Run each step only if the previous succeeded; on failure stop and report which step failed.
 
+**Non-TTY (subagent / CI)**: every interactive prompt crashes with `ERR_USE_AFTER_CLOSE` — always pass the non-interactive flags instead:
+
+```bash
+trellis update --create-new
+npx skills add ScoFan-official/oh-my-trellis --agent devin --copy -y
+trellis init -r gh:ScoFan-official/oh-my-trellis -t agent-workflow --append --devin --monorepo   # monorepo repos only; omit --monorepo otherwise
+```
+
+**Publishing a release (maintainers)**: never chain `git commit && git tag && git push` — a failed commit (e.g. a red local test suite) silently leaves the tag pointing at the previous tree. Commit, verify `git log -1` is the intended commit, then tag and push. The pack repo's `cli-v<ver>` tag must name the same version the fork's `v<ver>` tag carries in `packages/cli/package.json`.
+
 ## Step 5: Report
 
 - old version → new version (`trellis --version` again to verify)

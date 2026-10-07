@@ -308,6 +308,35 @@ describe.skipIf(PYTHON === null)("clai-delta (domains layer CLI)", () => {
     expect(r.status).toBe(0);
   });
 
+  it("validate fails on worklog heading-anchor vs 状态 mismatch", () => {
+    seedDomains(tmp);
+    makeBoard(tmp, "deap");
+    fs.writeFileSync(
+      path.join(tmp, ".trellis", "domains", "deap", "worklog", "w.md"),
+      "# w\n\n## [t-1]-devin-TESTHOST-20261007-1915 [~]\n\n- **状态**：[x] 收工\n",
+      "utf-8",
+    );
+    const dir = createTask(tmp, "wl-anchor-bad");
+
+    const r = runTask(tmp, "validate", dir);
+    expect(r.status).toBe(1);
+    expect(r.stdout + r.stderr).toContain("heading");
+  });
+
+  it("validate passes when worklog anchors agree (or are absent)", () => {
+    seedDomains(tmp);
+    makeBoard(tmp, "deap");
+    fs.writeFileSync(
+      path.join(tmp, ".trellis", "domains", "deap", "worklog", "w.md"),
+      "# w\n\n## [t-1]-devin-TESTHOST-20261007-1915 [x]\n\n- **状态**：[x] 收工\n\n## [t-2]-devin-TESTHOST-20261007-2000\n\n- **状态**：✅\n",
+      "utf-8",
+    );
+    const dir = createTask(tmp, "wl-anchor-ok");
+
+    const r = runTask(tmp, "validate", dir);
+    expect(r.status).toBe(0);
+  });
+
   // ── CLAI-4: finish/archive warn 旗未拔 (non-blocking, never deletes) ──
 
   it("finish warns when our own flag is still planted", () => {

@@ -23,6 +23,10 @@ CLAI DELTA LIST (numbered for the contract document — when an upstream
             Every directory under .trellis/domains/ (except _scaffold) must
             have a REGISTRY.md line, and every REGISTRY line must resolve to
             an existing directory. Mismatches fail validate.
+            Sibling check: when a worklog entry heading carries a trailing
+            status anchor ([x]/[~]) AND its own 状态 field carries one too,
+            the two must agree — a stale `[~]` heading on a closed entry
+            poisons `[~]` greps used by the reconciliation rules.
     CLAI-4  task.py finish/archive own-flag warning
             If the finished/archived task's domain board still carries THIS
             writer's flag, warn (旗未拔) — never auto-delete, never block.
@@ -36,6 +40,9 @@ CLAI DELTA LIST (numbered for the contract document — when an upstream
 Writer identity (own-writer matching): `TRELLIS_WRITER` env var wins;
 otherwise `devin-<hostname>` — the convention used by Devin agents in
 dogfood. A flag's writer field is an opaque string compared by equality.
+Repos whose hygiene rules ban machine identifiers in committed files
+(e.g. "no hostnames in git history") should set `TRELLIS_WRITER` to a
+neutral alias like `devin` — the protocol only needs uniqueness.
 """
 
 from __future__ import annotations
@@ -79,6 +86,11 @@ _REGISTRY_LINE_RE = re.compile(r"^([a-z0-9][a-z0-9-]*)/\s*—\s*(.*)$")
 _FLAG_PREFIXES = ("旗:", "旗：")
 _FLAG_SEPARATOR = " · "
 _FLAG_SINCE_RE = re.compile(r"自\s*(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2})")
+# Worklog entry heading ends with a status anchor: `## [<id>-<ts>] [x|~]`.
+_WORKLOG_HEADING_RE = re.compile(r"^##\s+.*\s\[([~x])\]\s*$")
+# Entry body carries `- **状态**：[x] ...` — only compared when it has an
+# anchor; entries phrased without one (✅ etc.) are skipped.
+_WORKLOG_STATUS_RE = re.compile(r"^\s*-\s*\*\*状态\*\*：\s*\[([~x])\]")
 
 
 # =============================================================================
@@ -356,6 +368,52 @@ def reconcile_domain_registry(repo_root: Path) -> list[str]:
         problems.append(
             f"REGISTRY.md line '{slug}/' points at no existing board directory."
         )
+    return problems
+
+
+def worklog_anchor_problems(repo_root: Path) -> list[str]:
+    """Return worklog heading-anchor mismatches (empty list = clean).
+
+    Sibling check under CLAI-3: an entry heading ends with a status anchor
+    (`[x]`/`[~]`) and its 状态 field may carry one too. When both exist
+    they must agree — otherwise `[~]` greps used by the reconciliation
+    rules hit stale markers on closed entries. Absent either side = skip.
+    """
+    domains_dir = Path(repo_root) / DIR_WORKFLOW / DIR_DOMAINS
+    if not domains_dir.is_dir():
+        return []
+
+    problems: list[str] = []
+    for board in sorted(domains_dir.iterdir()):
+        worklog_dir = board / "worklog"
+        if board.name == SCAFFOLD_DIR or not worklog_dir.is_dir():
+            continue
+        for file in sorted(worklog_dir.glob("*.md")):
+            try:
+                text = file.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            entry_anchor: str | None = None
+            entry_heading = ""
+            for line in text.splitlines():
+                match = _WORKLOG_HEADING_RE.match(line)
+                if match:
+                    entry_anchor = match.group(1)
+                    entry_heading = line.strip()[:80]
+                    continue
+                if entry_anchor is None:
+                    continue
+                status = _WORKLOG_STATUS_RE.match(line)
+                if status is None:
+                    continue
+                if status.group(1) != entry_anchor:
+                    rel = file.relative_to(Path(repo_root))
+                    problems.append(
+                        f"{rel}: worklog 条目 heading 锚 [{entry_anchor}] 与"
+                        f" 状态锚 [{status.group(1)}] 不符（{entry_heading}）"
+                        " — 收工条目把 heading 的 [~] 改成 [x]。"
+                    )
+                entry_anchor = None  # 状态行已消费，本条结束
     return problems
 
 

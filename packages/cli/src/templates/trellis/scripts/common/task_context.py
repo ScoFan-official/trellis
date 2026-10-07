@@ -196,6 +196,11 @@ def cmd_validate(args: argparse.Namespace) -> int:
     for problem in clai_delta.reconcile_domain_registry(repo_root):
         print(f"  {colored(problem, Colors.RED)}")
         total_errors += 1
+    # CLAI-3 sibling: worklog heading anchors must agree with each entry's
+    # own 状态 anchor when both are present (stale `[~]` poisons greps).
+    for problem in clai_delta.worklog_anchor_problems(repo_root):
+        print(f"  {colored(problem, Colors.RED)}")
+        total_errors += 1
 
     print()
     if total_errors == 0:
