@@ -56,6 +56,7 @@ from common.io import (
 )
 from common.task_utils import resolve_task_dir, run_task_hooks
 from common.tasks import iter_active_tasks, children_progress
+from common.frontier import cmd_frontier
 
 # Import command handlers from split modules (also re-exports for plan.py compatibility)
 from common.task_store import (
@@ -795,6 +796,13 @@ def main() -> int:
     p_list.add_argument("--status", "-s", help="Filter by status")
     p_list.add_argument("--json", action="store_true", help="Output machine-readable JSON")
 
+    # frontier
+    p_frontier = subparsers.add_parser(
+        "frontier", help="List tasks whose blockers are all satisfied"
+    )
+    p_frontier.add_argument("--board", help="Filter to one domain board slug (meta.domain)")
+    p_frontier.add_argument("--json", action="store_true", help="Output machine-readable JSON")
+
     # add-subtask
     p_addsub = subparsers.add_parser("add-subtask", help="Link child task to parent")
     p_addsub.add_argument("parent_dir", help="Parent task directory")
@@ -832,6 +840,7 @@ def main() -> int:
         "add-subtask": cmd_add_subtask,
         "remove-subtask": cmd_remove_subtask,
         "list": cmd_list,
+        "frontier": cmd_frontier,
         "list-archive": cmd_list_archive,
     }
 

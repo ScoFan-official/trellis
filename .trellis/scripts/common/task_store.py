@@ -25,6 +25,7 @@ from datetime import datetime
 from pathlib import Path
 
 from . import clai_delta
+from . import frontier
 from .config import (
     get_codex_dispatch_mode,
     get_packages,
@@ -1946,6 +1947,22 @@ def cmd_set_meta(args: argparse.Namespace) -> int:
     if data is None:
         _report_read_failure(task_json, reason)
         return 1
+
+    if key == "blocked_by":
+        # Blockers live in a formal field so `task.py frontier` can resolve the
+        # graph without guessing which meta keys mean what.
+        refs = frontier.blocked_by_refs({"blocked_by": value})
+        data["blocked_by"] = refs
+        existing_meta = data.get("meta")
+        if isinstance(existing_meta, dict) and "blocked_by" in existing_meta:
+            del existing_meta["blocked_by"]
+            data["meta"] = existing_meta
+            print(colored("Note: cleared the legacy meta.blocked_by copy", Colors.YELLOW))
+        if not write_json(task_json, data):
+            _report_write_failure(task_json)
+            return 1
+        print(colored(f"✓ Blockers set: {', '.join(refs) or '(none)'}", Colors.GREEN))
+        return 0
 
     meta = data.get("meta")
     if not isinstance(meta, dict):
