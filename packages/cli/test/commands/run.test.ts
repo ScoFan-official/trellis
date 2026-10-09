@@ -17,7 +17,6 @@ import {
   isProtectedPath,
   normalizeOptions,
   parsePorcelain,
-  refAllowed,
   runLoop,
   type FrontierEntry,
   type RunOptions,
@@ -47,6 +46,11 @@ interface Script {
   existingWorktrees?: string[];
   /** Directories whose branch already archived them (a previous run). */
   closedOnBranch?: string[];
+  /** CLAI-8 answer for the ticket branch. Default: tier refuses any push. */
+  gate?: { allow?: boolean; reason?: string; tier?: string };
+  /** What `gh pr create` prints. Default: a real-looking PR URL. */
+  ghOutput?: string;
+  ghExit?: number;
 }
 
 interface Harness {
@@ -54,6 +58,7 @@ interface Harness {
   taskCalls: { args: string[]; cwd?: string }[];
   gitCalls: { args: string[]; cwd?: string }[];
   ghCalls: string[][];
+  gateCalls: string[];
   workerRequests: WorkerRequest[];
   pushed: string[][];
   stagingCalls: string[][];
@@ -80,6 +85,7 @@ function harness(script: Script = {}): Harness {
     taskCalls: [],
     gitCalls: [],
     ghCalls: [],
+    gateCalls: [],
     workerRequests: [],
     pushed: [],
     stagingCalls: [],
@@ -162,10 +168,22 @@ function harness(script: Script = {}): Harness {
     },
     gh(args) {
       h.ghCalls.push(args);
-      return { status: 0, stdout: "https://github.com/o/r/pull/9\n", stderr: "" };
+      return {
+        status: script.ghExit ?? 0,
+        stdout: script.ghOutput ?? "https://github.com/o/r/pull/9\n",
+        stderr: "",
+      };
     },
     hasRemote() {
       return script.remote === true;
+    },
+    deliveryGate(ref) {
+      h.gateCalls.push(ref);
+      return {
+        allow: script.gate?.allow === true,
+        reason: script.gate?.reason ?? "tier(hands-off) — push needs supervised-delivery",
+        tier: script.gate?.tier ?? "hands-off",
+      };
     },
     taskField(dir, field) {
       const table = script.fields?.[dir];
@@ -205,28 +223,6 @@ function harness(script: Script = {}): Harness {
   h.ports = ports;
   return h;
 }
-
-describe("refAllowed — the push whitelist", () => {
-  it("matches one segment and refuses a nested ref", () => {
-    expect(refAllowed("feature/ticket", "feature/*")).toBe(true);
-    expect(refAllowed("feature/a/b", "feature/*")).toBe(false);
-  });
-
-  it("matches a bare task slug exactly", () => {
-    expect(refAllowed("09-30-deap-draft-evaluation", "09-30-deap-draft-evaluation")).toBe(true);
-    expect(refAllowed("09-30-other", "09-30-deap-draft-evaluation")).toBe(false);
-  });
-
-  it("accepts a comma list and ignores surrounding blanks", () => {
-    expect(refAllowed("oh-my/x", " feature/* , oh-my/* ")).toBe(true);
-    expect(refAllowed("release/x", "feature/*,oh-my/*")).toBe(false);
-  });
-
-  it("treats regex metacharacters as literals", () => {
-    expect(refAllowed("a.b", "a.b")).toBe(true);
-    expect(refAllowed("axb", "a.b")).toBe(false);
-  });
-});
 
 describe("runLoop — the success path", () => {
   it("takes the frontier head, works in its worktree, verifies and archives there", async () => {
@@ -347,8 +343,13 @@ describe("runLoop — the stop lines", () => {
   });
 
   it("never delivers on a failed verification contract", async () => {
-    const h = harness({ ready: [{ dir: "01-01-alpha" }], remote: true, verifyVerified: false });
-    const result = await runLoop({ ...baseOptions({ allowPush: "feature/*" }), failThreshold: 1 }, h.ports);
+    const h = harness({
+      ready: [{ dir: "01-01-alpha" }],
+      remote: true,
+      verifyVerified: false,
+      gate: { allow: true, reason: "whitelist(feature/*)", tier: "supervised-delivery" },
+    });
+    const result = await runLoop({ ...baseOptions(), failThreshold: 1 }, h.ports);
 
     expect(result.stopped).toBe("fail_threshold");
     expect(h.pushed).toEqual([]);
@@ -357,7 +358,10 @@ describe("runLoop — the stop lines", () => {
     expect(h.ledger.some((l) => l.action === "verify" && l.exit !== 0)).toBe(true);
   });
 
-  it("stops at the ticket rather than pushing without a whitelist", async () => {
+  it("defers and stops at the ticket when the tier does not permit push", async () => {
+    // AC5: outside supervised-delivery nothing is pushed. This is ordinary, not
+    // anomalous, so the ticket stays open on its branch and the line halts
+    // there rather than striking out.
     const h = harness({ ready: [{ dir: "01-01-alpha" }], remote: true });
     const result = await runLoop(baseOptions(), h.ports);
 
@@ -365,36 +369,93 @@ describe("runLoop — the stop lines", () => {
     expect(result.attempted).toBe(1);
     expect(result.archived).toBe(0);
     expect(h.pushed).toEqual([]);
+    expect(h.gateCalls).toEqual(["feature/01-01-alpha"]);
     expect(h.taskCalls.some((c) => c.args[0] === "archive")).toBe(false);
-    expect(h.ledger.find((l) => l.action === "delivery")?.reason).toMatch(/deferred/);
+    expect(h.ledger.find((l) => l.action === "delivery")?.reason).toMatch(/^deferred: tier\(hands-off\)/);
   });
 
-  it("refuses and halts when the ticket branch is outside the whitelist", async () => {
+  it("halts for adjudication when the gate protects the ref", async () => {
+    // AC4: a ticket whose branch IS the default branch must be refused with a
+    // trace, and the whole line stops — not a warning walked past.
     const h = harness({
       ready: [{ dir: "01-01-alpha" }],
       remote: true,
       fields: { "01-01-alpha": { branch: "main", base_branch: "develop" } },
+      gate: { reason: "protected_ref(default_branch=main;remote_head)", tier: "supervised-delivery" },
     });
-    const result = await runLoop(baseOptions({ allowPush: "feature/*" }), h.ports);
+    const result = await runLoop(baseOptions(), h.ports);
 
     expect(result.stopped).toBe("push_refused");
     expect(h.pushed).toEqual([]);
     expect(h.taskCalls.some((c) => c.args[0] === "archive")).toBe(false);
-    expect(h.ledger.some((l) => l.action === "delivery" && /rejected/.test(l.reason ?? ""))).toBe(true);
+    expect(h.ledger.some((l) => l.action === "delivery" && /refused: protected_ref/.test(l.reason ?? ""))).toBe(
+      true,
+    );
   });
 
-  it("pushes, opens a ready PR and records the pointer when the whitelist admits the ref", async () => {
-    const h = harness({ ready: [{ dir: "01-01-alpha" }], remote: true });
-    const result = await runLoop(baseOptions({ allowPush: "feature/*" }), h.ports);
+  it("treats a ref the whitelist never named as an anomaly, not a pass", async () => {
+    const h = harness({
+      ready: [{ dir: "01-01-alpha" }],
+      remote: true,
+      gate: { reason: "outside_auto_push_refs", tier: "supervised-delivery" },
+    });
+    const result = await runLoop(baseOptions(), h.ports);
+
+    expect(result.stopped).toBe("push_refused");
+    expect(h.pushed).toEqual([]);
+  });
+
+  it("fails closed when the gate answer cannot be read", async () => {
+    const h = harness({
+      ready: [{ dir: "01-01-alpha" }],
+      remote: true,
+      gate: { reason: "unreadable_output(traceback: boom)", tier: "unknown" },
+    });
+    const result = await runLoop(baseOptions(), h.ports);
+
+    expect(result.stopped).toBe("delivery_deferred");
+    expect(h.pushed).toEqual([]);
+    expect(h.taskCalls.some((c) => c.args[0] === "archive")).toBe(false);
+  });
+
+  it("pushes, opens a ready PR and records the pointer when the gate allows the ref", async () => {
+    // AC6 shape: ready PR + pr_url write-back, and the runner never merges.
+    const h = harness({
+      ready: [{ dir: "01-01-alpha" }],
+      remote: true,
+      gate: { allow: true, reason: "whitelist(feature/*)", tier: "supervised-delivery" },
+    });
+    const result = await runLoop(baseOptions(), h.ports);
 
     expect(result.archived).toBe(1);
     expect(h.pushed).toEqual([["push", "-u", "origin", "feature/01-01-alpha"]]);
     expect(h.ghCalls[0]?.slice(0, 2)).toEqual(["pr", "create"]);
-    expect(h.ghCalls[0]).toContain("--ready");
+    // 定版 rule: the runner's PR arrives ready for review, never draft — and
+    // `--ready` is not a flag gh accepts (the live run proved it).
+    expect(h.ghCalls[0]).not.toContain("--draft");
+    expect(h.ghCalls[0]).not.toContain("--ready");
+    expect(h.ghCalls[0]).toContain("--head");
+    expect(h.ghCalls[0]).toContain("--base");
     const setPr = h.taskCalls.find((c) => c.args[0] === "set-pr");
     expect(setPr?.args[1]).toBe("01-01-alpha");
     expect(setPr?.args[2]).toBe("https://github.com/o/r/pull/9");
     expect(setPr?.cwd).toBe(wtOf("01-01-alpha"));
+  });
+
+  it("refuses to store a review pointer gh did not actually print", async () => {
+    const h = harness({
+      ready: [{ dir: "01-01-alpha" }],
+      remote: true,
+      gate: { allow: true, reason: "whitelist(feature/*)", tier: "supervised-delivery" },
+      ghOutput: "could not determine which repository to use\n",
+    });
+    const result = await runLoop({ ...baseOptions(), failThreshold: 1 }, h.ports);
+
+    expect(result.stopped).toBe("fail_threshold");
+    expect(h.pushed).toEqual([["push", "-u", "origin", "feature/01-01-alpha"]]);
+    expect(h.taskCalls.some((c) => c.args[0] === "set-pr")).toBe(false);
+    expect(h.taskCalls.some((c) => c.args[0] === "archive")).toBe(false);
+    expect(h.ledger.find((l) => l.action === "blocked")?.reason).toMatch(/pr_url_unreadable/);
   });
 
   it("leaves a ticket that already has a review pointer untouched", async () => {
@@ -582,7 +643,6 @@ describe("normalizeOptions — the CLI surface refuses ambiguity", () => {
     if (out.ok) {
       expect(out.options.maxTickets).toBe(5);
       expect(out.options.failThreshold).toBe(3);
-      expect(out.options.allowPush).toBeUndefined();
     }
   });
 
@@ -597,16 +657,20 @@ describe("normalizeOptions — the CLI surface refuses ambiguity", () => {
   });
 
   it("parses durations and board filters", () => {
-    const out = normalizeOptions(
-      { provider: "claude", board: "deap", timeout: "20m", allowPush: " feature/* " },
-      ROOT,
-    );
+    const out = normalizeOptions({ provider: "claude", board: "deap", timeout: "20m" }, ROOT);
     expect(out.ok).toBe(true);
     if (out.ok) {
       expect(out.options.board).toBe("deap");
       expect(out.options.workerTimeoutMs).toBe(20 * 60 * 1000);
-      expect(out.options.allowPush).toBe("feature/*");
     }
+  });
+
+  it("ignores a leftover --allow-push instead of keeping a second source of truth", () => {
+    // Delivery is config (CLAI-8). Honouring a flag here would let an operator
+    // outvote the protected-position rule, which is the whole point of the gate.
+    const out = normalizeOptions({ provider: "claude", allowPush: "main" }, ROOT);
+    expect(out.ok).toBe(true);
+    expect(JSON.stringify(out.ok ? out.options : {})).not.toMatch(/allowPush/);
   });
 });
 
@@ -631,19 +695,26 @@ describe("runLoop — dry run", () => {
     expect(h.taskCalls[0]?.args).toEqual(["frontier", "--json", "--board", "deap"]);
   });
 
-  it("prints the delivery mode it would use", async () => {
-    const h = harness({ ready: [{ dir: "01-01-alpha" }], remote: true });
-    await runLoop(baseOptions({ dryRun: true, allowPush: "feature/*" }), h.ports);
+  it("prints the push the config would allow", async () => {
+    const h = harness({
+      ready: [{ dir: "01-01-alpha" }],
+      remote: true,
+      gate: { allow: true, reason: "whitelist(feature/*)", tier: "supervised-delivery" },
+    });
+    await runLoop(baseOptions({ dryRun: true }), h.ports);
 
     const printed = h.logs.find((line) => line.startsWith("{"));
-    expect(printed).toContain("delivery:push(feature/*)+pr");
+    expect(printed).toContain("delivery:push(feature/01-01-alpha)+pr");
+    expect(printed).toContain("supervised-delivery");
   });
 
-  it("says delivery stays deferred when no whitelist was given", async () => {
+  it("says delivery defers when the tier refuses, and asks the gate for the branch", async () => {
     const h = harness({ ready: [{ dir: "01-01-alpha" }] });
     await runLoop(baseOptions({ dryRun: true }), h.ports);
 
     const printed = h.logs.find((line) => line.startsWith("{"));
-    expect(printed).toContain("delivery:deferred(no --allow-push)");
+    expect(printed).toContain("delivery:refused(tier(hands-off)");
+    expect(h.gateCalls).toEqual(["feature/01-01-alpha"]);
+    expect(h.worktreeAdds).toBe(0);
   });
 });

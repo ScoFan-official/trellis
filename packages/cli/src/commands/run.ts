@@ -3,10 +3,10 @@
  *
  * Takes the frontier head, gives it an isolated worktree, hands it to one
  * headless worker, runs the ticket's own verification contract, and records
- * every step in a run ledger. Delivery is opt-in: without `--allow-push
- * <ref-glob>` the runner never touches a remote, so the loop is safe on a repo
- * whose delivery tier is still `hands-off` (the `supervised-delivery` tier with
- * CLAI-8 decides this by configuration instead, in the next slice).
+ * every step in a run ledger. Delivery is decided by config, not by a flag:
+ * `task.py delivery-gate` (CLAI-8) answers for the ticket branch, and only
+ * `autonomy: supervised-delivery` with a matching `delivery.auto_push_refs`
+ * entry lets the runner push at all (AC5).
  *
  * Why everything happens in the worktree: `.trellis/` is committed content, so
  * a worktree carries its own copy of the task tree. Claim, verify and archive
@@ -19,8 +19,8 @@
  *   - a dependency cycle → stop, grab nothing (frontier exits non-zero)
  *   - N consecutive failures on the same ticket (default 3) → mark it
  *     `triage=ready-for-human` and halt the whole line
- *   - verified work with no push permission → stop at that ticket, leaving it
- *     open on its branch; pushing is someone else's call
+ *   - the gate refusing a protected or unlisted ref → halt for adjudication
+ *     (AC4); a tier that simply does not push → defer and stop there
  *
  * `runLoop` talks to the world only through `RunnerPorts`, so the policy is
  * testable without a repo, a worker, or a network. The real ports are the thin
@@ -69,6 +69,12 @@ export interface RunnerPorts {
   git(args: string[], cwd?: string): CommandResult;
   gh(args: string[]): CommandResult;
   hasRemote(): boolean;
+  /**
+   * CLAI-8: may this repo push `ref`? The tier + whitelist answer comes from
+   * `task.py delivery-gate`, so config is the only source of truth about
+   * delivery — a CLI flag would be a second one.
+   */
+  deliveryGate(ref: string): { allow: boolean; reason: string; tier: string };
   /** Read one top-level string field of the main repo's copy of a ticket. */
   taskField(dir: string, field: string): string | null;
   /**
@@ -102,8 +108,6 @@ export interface RunOptions {
   agent?: string;
   model?: string;
   workerTimeoutMs: number;
-  /** Comma-separated ref globs the runner may push. Absent = no push at all. */
-  allowPush?: string;
   failThreshold: number;
 }
 
@@ -154,28 +158,11 @@ function positiveInt(
 }
 
 /**
- * Ref whitelist matcher. `*` does NOT cross `/`, so `feature/*` admits
- * `feature/ticket` but not `feature/a/b`. A whitelist that allows less than it
- * appears to allow is the safe direction for a loop nobody is watching.
+ * The action plan a dry run prints. Delivery comes from `task.py delivery-gate`
+ * (CLAI-8), so the plan names the verdict the config gives for this ticket's
+ * branch rather than a flag the operator waved.
  */
-export function refAllowed(ref: string, globs: string): boolean {
-  return globs
-    .split(",")
-    .map((glob) => glob.trim())
-    .filter(Boolean)
-    .some((glob) => {
-      const pattern = glob
-        .split("*")
-        .map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
-        .join("[^/]*");
-      return new RegExp(`^${pattern}$`).test(ref);
-    });
-}
-
-function plannedActions(opts: RunOptions): string[] {
-  const delivery = opts.allowPush
-    ? `delivery:push(${opts.allowPush})+pr`
-    : "delivery:deferred(no --allow-push)";
+function plannedActions(opts: RunOptions, delivery: string): string[] {
   return [
     "frontier:head",
     "worktree:add",
@@ -479,36 +466,35 @@ async function runAttempt(
   }
 
   if (ports.hasRemote()) {
-    if (!opts.allowPush) {
+    const gate = ports.deliveryGate(branch);
+    if (!gate.allow) {
+      // Two different refusals, on purpose (AC4/AC5): a tier that does not
+      // permit push at all is ordinary — the work stands on its branch. A
+      // protected position, or a ref the configured whitelist never named,
+      // means the operator's intent and the ticket's shape disagree, so the
+      // line halts for adjudication instead of a warning nobody is watching.
+      const adjudicate = /protected_ref|outside_auto_push_refs/.test(gate.reason);
       ports.ledgerAppend({
         ticket: dir,
         action: "delivery",
         commit: oid,
-        reason: "deferred: no --allow-push (supervised-delivery/CLAI-8 decides this by config)",
+        reason: `${adjudicate ? "refused" : "deferred"}: ${gate.reason}`,
       });
       return {
         kind: "stop",
-        reason: "delivery_deferred",
-        detail: `${dir} verified at ${oid} but the runner may not push — the work stands on ${branch}, unarchived, waiting for delivery`,
-      };
-    }
-    if (!refAllowed(branch, opts.allowPush)) {
-      ports.ledgerAppend({
-        ticket: dir,
-        action: "delivery",
-        commit: oid,
-        reason: `rejected: ${branch} outside --allow-push(${opts.allowPush})`,
-      });
-      return {
-        kind: "stop",
-        reason: "push_refused",
-        detail: `push of ${branch} is outside the whitelist — adjudicate by hand; the line stops here`,
+        reason: adjudicate ? "push_refused" : "delivery_deferred",
+        detail: adjudicate
+          ? `push of ${branch} refused by delivery-gate (${gate.reason}) — the line stops here for a human`
+          : `${dir} verified at ${oid} but ${gate.reason} — the work stands on ${branch}, unarchived`,
       };
     }
     const pushed = ports.git(["push", "-u", "origin", branch], worktree);
     if (pushed.status !== 0) {
       return { kind: "failed", reason: `push_failed(${firstLine(pushed.stderr || pushed.stdout)})` };
     }
+    // No `--draft`: the 定版 rule is that the runner opens a PR that is already
+    // ready for review (gh opens ready by default), and no `--ready` either —
+    // that flag does not exist, which the live run discovered the hard way.
     const pr = ports.gh([
       "pr",
       "create",
@@ -520,12 +506,17 @@ async function runAttempt(
       entry.title ?? dir,
       "--body",
       `Unattended run for ticket \`${dir}\`. Verify: \`python ./.trellis/scripts/task.py run-verify ${dir}\`.`,
-      "--ready",
     ]);
     if (pr.status !== 0) {
       return { kind: "failed", reason: `pr_open_failed(${firstLine(pr.stderr || pr.stdout)})` };
     }
     const url = firstLine(pr.stdout);
+    if (!/^https?:\/\//.test(url)) {
+      return {
+        kind: "failed",
+        reason: `pr_url_unreadable(gh printed: ${url || "(nothing)"}; the branch is pushed, open the PR by hand)`,
+      };
+    }
     ports.task(["set-pr", dir, url], worktree);
     ports.ledgerAppend({ ticket: dir, action: "delivery", commit: oid, detail: url });
   } else {
@@ -560,7 +551,7 @@ export async function runLoop(opts: RunOptions, ports: RunnerPorts): Promise<Run
   ports.ledgerAppend({
     ticket: "-",
     action: "run_start",
-    detail: `board=${opts.board ?? "-"} max=${opts.maxTickets} push=${opts.allowPush ?? "off"} dry=${opts.dryRun}`,
+    detail: `board=${opts.board ?? "-"} max=${opts.maxTickets} dry=${opts.dryRun}`,
   });
 
   for (;;) {
@@ -634,7 +625,18 @@ export async function runLoop(opts: RunOptions, ports: RunnerPorts): Promise<Run
 
     const head = candidates[0] as FrontierEntry;
     if (opts.dryRun) {
-      ports.log(JSON.stringify({ ticket: head.dir, actions: plannedActions(opts) }, null, 2));
+      const branch = ports.taskField(head.dir, "branch") ?? "(no branch set)";
+      const gate = ports.deliveryGate(branch);
+      const delivery = gate.allow
+        ? `delivery:push(${branch})+pr`
+        : `delivery:refused(${gate.reason})`;
+      ports.log(
+        JSON.stringify(
+          { ticket: head.dir, branch, tier: gate.tier, actions: plannedActions(opts, delivery) },
+          null,
+          2,
+        ),
+      );
       return { stopped: "dry_run", attempted, archived, failed };
     }
 
@@ -717,6 +719,27 @@ export function realPorts(
     },
     hasRemote() {
       return run("git", ["remote"], root).stdout.trim().length > 0;
+    },
+    deliveryGate(ref) {
+      const res = run(python, [taskPy, "delivery-gate", ref, "--json"], root);
+      try {
+        const parsed = JSON.parse(res.stdout) as {
+          allow?: boolean;
+          reason?: string;
+          tier?: string;
+        };
+        return {
+          allow: parsed.allow === true,
+          reason: parsed.reason ?? `unreadable_output(${firstLine(res.stderr || res.stdout)})`,
+          tier: parsed.tier ?? "unknown",
+        };
+      } catch {
+        return {
+          allow: false,
+          reason: `unreadable_output(${firstLine(res.stderr || res.stdout) || `exit_${res.status}`})`,
+          tier: "unknown",
+        };
+      }
     },
     taskField(dir, field) {
       try {
@@ -807,8 +830,6 @@ export function normalizeOptions(
       agent,
       model: typeof raw.model === "string" && raw.model ? raw.model : undefined,
       workerTimeoutMs: timeout ?? DEFAULT_WORKER_TIMEOUT_MS,
-      allowPush:
-        typeof raw.allowPush === "string" && raw.allowPush.trim() ? raw.allowPush.trim() : undefined,
       failThreshold: failThreshold.value,
     },
   };

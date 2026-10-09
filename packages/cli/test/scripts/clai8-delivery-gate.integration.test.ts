@@ -157,6 +157,26 @@ describe.skipIf(PYTHON === null)("task.py delivery-gate", () => {
     expect(f.default_source).toBeTruthy();
   });
 
+  it("still protects the default branch when the remote cannot name it", () => {
+    // A remote whose HEAD is unresolvable (`HEAD branch: (unknown)`, offline,
+    // bare repo initialised to another branch) must not leave `main` looking
+    // pushable. Caught on the live fixture: the ref was refused only for
+    // missing the whitelist, so a `*` whitelist would have let it through.
+    const bare = fs.mkdtempSync(path.join(os.tmpdir(), "delivery-gate-remote-"));
+    git(bare, "init", "-q", "--bare", "--initial-branch=elsewhere");
+    git(repo, "remote", "add", "origin", bare);
+    git(repo, "push", "-q", "origin", "main:main");
+    writeConfig(repo, "autonomy: supervised-delivery\ndelivery:\n  auto_push_refs:\n    - \"*\"\n");
+
+    try {
+      const g = gate(repo, "main");
+      expect(g.payload.allow).toBe(false);
+      expect(String(g.payload.reason)).toMatch(/protected_ref\(default_branch=main;local_head/);
+    } finally {
+      fs.rmSync(bare, { recursive: true, force: true });
+    }
+  });
+
   it("protects an existing tag even when a glob would match it", () => {
     git(repo, "tag", "v9.9.9");
     writeConfig(repo, "autonomy: supervised-delivery\ndelivery:\n  auto_push_refs:\n    - \"v9*\"\n");

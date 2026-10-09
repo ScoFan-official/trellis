@@ -416,10 +416,6 @@ program
   .option("--agent <name>", "Agent definition to run as (supplies the provider)")
   .option("--model <name>", "Model override passed to the provider")
   .option("--timeout <duration>", "Per-worker timeout, e.g. 20m (default 30m)")
-  .option(
-    "--allow-push <ref-globs>",
-    "Comma-separated ref whitelist. Without it the runner never pushes and never opens a PR.",
-  )
   .action(async (options: Record<string, unknown>) => {
     try {
       const result = await runLoopCommand(options, cwd);

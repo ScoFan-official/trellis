@@ -957,18 +957,23 @@ def default_branch_facts(repo_root: Path) -> tuple[str | None, str]:
     """(default branch, how it was learned) — git facts only.
 
     `git.resolve_default_branch` reads `refs/remotes/origin/HEAD` then
-    `git remote show origin`. Both fail in a repo with no remote, which is also
-    the case where nothing can be pushed at all; there the main working tree's
-    own HEAD is the only local fact that means "the branch work merges into", so
-    it is used as the fallback and reported as such.
+    `git remote show origin`. Either can fail with a remote configured — an
+    offline host, or a bare repo whose own HEAD points at a branch that was
+    never pushed. Leaving the answer "unknown" there would mean a `*` whitelist
+    could push the trunk, so the last resort is the branch the main working tree
+    itself has checked out, reported as such. It can over-protect (a ticket
+    branch checked out in the main tree gets refused); over-protecting is the
+    safe direction for a loop nobody is watching.
     """
     resolved = git.resolve_default_branch(repo_root)
     if resolved:
         return resolved, "remote_head"
-    if git.has_git_remote(repo_root):
-        return None, "unresolved"
-    head = git.current_branch_name(repo_root)
-    return (head, "local_head") if head else (None, "none")
+
+    main_root = git.main_worktree_root(repo_root) or repo_root
+    head = git.current_branch_name(main_root)
+    if head:
+        return head, "local_head_fallback"
+    return None, "none"
 
 
 def ref_is_tag(repo_root: Path, ref: str) -> bool:
