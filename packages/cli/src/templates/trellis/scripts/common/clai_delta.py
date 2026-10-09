@@ -32,7 +32,11 @@ CLAI DELTA LIST (numbered for the contract document — when an upstream
             writer's flag, warn (旗未拔) — never auto-delete, never block.
     CLAI-5  get_context 当前战线 (battle lines) section
             One line per REGISTRY-registered board: slug, purpose, flag
-            status, progress row count.
+            status, progress row count. Plus 下一票 (NEXT UP): the dependency
+            frontier's head (first startable ticket) — the mechanical
+            re-entry after an archive, matching the `next:` line the
+            per-turn hook appends to the no_task breadcrumb (both read
+            the same common/frontier.py — no second query implementation).
     CLAI-6  get_context 当前模式 (autonomy) line
             Reads .trellis/config.yaml `autonomy:`; `gated` | `hands-off`,
             default hands-off when the key is absent or unrecognized.
@@ -525,6 +529,52 @@ def battle_lines(
     return lines
 
 
+def next_up_lines(repo_root: Path) -> list[str]:
+    """Build the 下一票 (NEXT UP) section lines from the D1 frontier. D2.
+
+    next_up_lines builds the 下一票 (NEXT UP) section from the D1 frontier.
+
+    Emitted only for repos with the domains layer; empty when there is
+    nothing active. Answers "what starts next" mechanically — after an
+    archive the session re-enters at the frontier head, the same head the
+    per-turn hook renders as the `next:` line on the no_task breadcrumb
+    (both read common/frontier.py — no second query implementation).
+
+    Head only — `task.py frontier` prints the full ready/blocked list.
+    """
+    domains_dir = Path(repo_root) / DIR_WORKFLOW / DIR_DOMAINS
+    if not domains_dir.is_dir():
+        return []
+    try:
+        # Local import keeps an older common/frontier.py from taking down
+        # the whole context render.
+        from . import frontier
+        result = frontier.compute_frontier(repo_root)
+    except Exception:
+        return []
+
+    ready = result.get("ready") or []
+    blocked = result.get("blocked") or []
+    cycles = result.get("cycles") or []
+    if not ready and not blocked:
+        return []
+
+    lines = ["## 下一票 (NEXT UP)"]
+    if ready:
+        head = ready[0]
+        domain = f" @{head['domain']}" if head.get("domain") else ""
+        lines.append(
+            f"  - {head['dir']}/ ({head['status']}) [{head['priority']}]"
+            f"{domain} {head['title']}"
+        )
+    else:
+        lines.append("  - （无可开工票 — 依赖未满足）")
+    lines.append(
+        f"  ready {len(ready)} · blocked {len(blocked)} · cycles {len(cycles)}"
+    )
+    return lines
+
+
 def append_domain_context(lines: list[str], repo_root: Path) -> None:
     """Append CLAI-5/6 context output onto `lines` (thin call-site helper)."""
     lines.append("## 当前模式 (AUTONOMY)")
@@ -533,6 +583,10 @@ def append_domain_context(lines: list[str], repo_root: Path) -> None:
     section = battle_lines(repo_root)
     if section:
         lines.extend(section)
+        lines.append("")
+    next_up = next_up_lines(repo_root)
+    if next_up:
+        lines.extend(next_up)
         lines.append("")
 
 

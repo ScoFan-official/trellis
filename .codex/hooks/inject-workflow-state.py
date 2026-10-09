@@ -17,6 +17,15 @@ missing or a tag is absent, the breadcrumb degrades to a generic
 "Refer to workflow.md for current step." line so users see (and fix)
 the broken state instead of the hook silently masking it.
 
+Besides that text, the `no_task` breadcrumb carries a computed `next:`
+line — the dependency frontier's head (common/frontier.py), i.e. the first
+startable ticket. cmd_archive clears the active pointer in the same call
+that flips status, so this branch is what a just-finished task's next
+session actually sees; the pointer is the re-entry. This is task data,
+not breadcrumb wording — the single-source-of-truth rule for TEXT is
+untouched. The OpenCode plugin (inject-workflow-state.js) does not
+compute this line and parses the tag blocks only.
+
 Which platforms register this hook is decided by SHARED_HOOKS_BY_PLATFORM
 in templates/shared-hooks/index.ts — currently Claude, Codex, Gemini,
 Qoder, Copilot, CodeBuddy, Droid, Kiro, Trae and ZCode. That table is the
@@ -206,6 +215,41 @@ _TAG_RE = re.compile(
     re.DOTALL,
 )
 
+
+def frontier_next_hint(root: Path) -> str | None:
+    """`next:` line for the no_task breadcrumb — the dependency frontier head.
+
+    Rendered from task data (common/frontier.py), not from workflow.md: the
+    first startable ticket after ordering the active set by priority, with
+    blocked tickets excluded. Falls back to a blocked-count line when
+    nothing is startable, and to None when there are no active tasks at all.
+
+    Any failure degrades to None — a breadcrumb must never break because a
+    task.json is odd or the scripts tree predates common/frontier.py.
+    """
+    try:
+        scripts_dir = root / ".trellis" / "scripts"
+        if str(scripts_dir) not in sys.path:
+            sys.path.insert(0, str(scripts_dir))
+        from common.frontier import compute_frontier  # type: ignore[import-not-found]
+
+        result = compute_frontier(root)
+    except Exception:
+        return None
+
+    ready = result.get("ready") or []
+    if ready:
+        head = ready[0]
+        domain = f" @{head['domain']}" if head.get("domain") else ""
+        return (
+            f"next: {head['dir']}/ ({head['status']}) "
+            f"[{head['priority']}]{domain} {head['title']}"
+        )
+    blocked = result.get("blocked") or []
+    if blocked:
+        return f"next: (none ready — {len(blocked)} blocked)"
+    return None
+
 def load_breadcrumbs(root: Path) -> dict[str, str]:
     """Parse workflow.md for [workflow-state:STATUS] blocks.
 
@@ -362,13 +406,15 @@ def build_breadcrumb(
     templates: dict[str, str],
     source: str | None = None,
     breadcrumb_key: str | None = None,
+    hint: str | None = None,
 ) -> str:
     """Build the <workflow-state>...</workflow-state> block.
 
     - Known status (tag present in workflow.md) → detailed template body
     - Unknown status (no tag, or workflow.md missing) → generic
       "Refer to workflow.md for current step." line
-    - `no_task` pseudo-status (task_id is None) → header omits task info
+    - `no_task` pseudo-status (task_id is None) → header omits task info;
+      `hint` (the computed `next:` pointer) rides below the body
     """
     lookup_key = breadcrumb_key or status
     body = templates.get(lookup_key)
@@ -377,7 +423,8 @@ def build_breadcrumb(
     if body is None:
         body = "Refer to workflow.md for current step."
     header = f"Status: {status}" if task_id is None else f"Task: {task_id} ({status})"
-    return f"<workflow-state>\n{header}\n{body}\n</workflow-state>"
+    tail = f"\n{hint}" if hint else ""
+    return f"<workflow-state>\n{header}\n{body}{tail}\n</workflow-state>"
 
 
 # ---------------------------------------------------------------------------
@@ -440,9 +487,16 @@ def main() -> int:
     if task is None:
         # No active task — still emit a breadcrumb nudging AI toward
         # trellis-brainstorm + task.py create when user describes real work.
+        # The computed `next:` pointer is the D2 re-entry: after an archive
+        # the pointer is gone in the same call, so THIS branch is what the
+        # next session sees, and the frontier head tells it where to resume.
         no_task_key = resolve_breadcrumb_key("no_task", platform, config)
         breadcrumb = build_breadcrumb(
-            None, "no_task", templates, breadcrumb_key=no_task_key
+            None,
+            "no_task",
+            templates,
+            breadcrumb_key=no_task_key,
+            hint=frontier_next_hint(root),
         )
     else:
         task_id, status, source = task

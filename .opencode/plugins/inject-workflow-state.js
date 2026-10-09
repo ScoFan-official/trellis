@@ -216,6 +216,9 @@ export default async ({ directory }) => {
 
           const templates = loadBreadcrumbs(directory)
           const task = getActiveTask(ctx, platformInput)
+          // Parity note: the Python hook appends a computed `next:` frontier
+          // line to no_task breadcrumbs; this plugin parses workflow.md's tag
+          // blocks only and intentionally does not compute that line.
           const breadcrumb = task
             ? buildBreadcrumb(task.id, task.status, templates, task.source)
             : buildBreadcrumb(null, "no_task", templates)

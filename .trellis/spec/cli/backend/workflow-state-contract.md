@@ -299,7 +299,7 @@ Which breadcrumbs actually fire in normal flow:
 | `task_error` | ✅ reachable | Pseudo-status; emitted when a session task pointer resolves to a directory whose `task.json` cannot be read or has no usable `status`. |
 | `planning` | ✅ reachable | After `cmd_create` (which now auto-sets the session pointer when available) and before `cmd_start`. `planning-inline` is the Codex inline-mode breadcrumb body for the same task status. |
 | `in_progress` | ✅ reachable | After `cmd_start`, until `cmd_archive`. `in_progress-inline` is the Codex inline-mode breadcrumb body for the same task status. |
-| `completed` | ❌ DEAD in normal flow | `cmd_archive` writes `status="completed"` and immediately moves the task dir to `archive/`. The session-pointer cleanup in `clear_task_from_sessions` runs before the move, so the resolver loses the pointer in the same call. The block body in workflow.md is preserved for a future status-transition redesign (e.g. an explicit `in_progress → completed` command) but no current code path produces it. |
+| ~~`completed`~~ | ❌ DELETED (D2) | `cmd_archive` writes `status="completed"` and immediately moves the task dir to `archive/`, so the resolver loses the pointer in the same call and no tag could ever fire. The block was deleted from workflow.md (both variants); the turn after `finish-work` falls back to `no_task`, whose body documents the hook-computed `next:` frontier pointer (see "Post-archive re-entry" below). |
 | `stale_<source_type>` | ✅ reachable (rare) | Synthesized when the session pointer references a deleted task directory. Emits the generic body via `build_breadcrumb` because no `stale_*` tag is shipped. |
 
 **Test invariant** (`test/regression.test.ts`): workflow-state blocks must
@@ -312,6 +312,19 @@ and `implement.md`; in-progress keeps the commit step reachable before
 - `test that workflow.md [workflow-state:in_progress] mentions commit (Phase 3.4)`
 - `test that workflow.md [workflow-state:planning] mentions planning artifact gate`
 - `test that workflow.md [workflow-state:no_task] asks for task-creation consent`
+
+### Post-archive re-entry (D2)
+
+`completed` has no tag: `cmd_archive` clears the active-task pointer in the
+same call that flips status, so the next turn resolves to `no_task`. That
+branch is the re-entry point — `inject-workflow-state.py` appends a computed
+`next:` line (the dependency frontier's head from `common/frontier.py`) below
+the tag body whenever any task is startable, or a `(none ready — N blocked)`
+line when everything waits. `get_context.py` renders the same head as its
+`下一票` section for repos with the domains layer. Neither path mutates
+`task.json.status`; both read D1's `compute_frontier` (no second query
+implementation). The parser rule is untouched: the tag text still comes from
+workflow.md alone, and the OpenCode plugin does not compute the line.
 
 ---
 
@@ -401,8 +414,8 @@ nested Trellis sub-agents.
 - Breadcrumb body that changes the contract (e.g. removing a `[required ·
   once]` enforcement line — flag in PR description)
 - New lifecycle event added to `run_task_hooks`
-- Reachability changes (e.g. wiring a new status transition that makes
-  `completed` reachable)
+- Reachability changes (e.g. reinstating a status transition that makes
+  a deleted tag reachable again)
 
 Cross-reference: `cli/backend/quality-guidelines.md` "Routing Fixes: Audit
 ALL Entry Paths" — that audit pattern is what this contract enforces for

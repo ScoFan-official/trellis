@@ -431,4 +431,64 @@ describe.skipIf(PYTHON === null)("clai-delta (domains layer CLI)", () => {
     expect(r.stdout).toContain("gated");
     expect(r.stdout).not.toMatch(/当前模式[^\n]*hands-off/);
   });
+
+  // ── D2: get_context 下一票 (NEXT UP) section ─────────────────────────
+
+  it("get_context prints the frontier head as 下一票 when a ticket is ready", () => {
+    seedDomains(tmp);
+    makeBoard(tmp, "deap");
+    const dir = createTask(tmp, "next-head", "--domain", "deap");
+
+    const r = runContext(tmp);
+
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain("下一票");
+    expect(r.stdout).toContain(`${dir}/ (planning)`);
+    // The counts line pins the frontier view the head was picked from.
+    expect(r.stdout).toMatch(/ready\s*1\s*·\s*blocked\s*0/);
+  });
+
+  it("get_context 下一票 names the blocked state when nothing is ready", () => {
+    seedDomains(tmp);
+    makeBoard(tmp, "deap");
+    const a = createTask(tmp, "cyc-a", "--domain", "deap");
+    const b = createTask(tmp, "cyc-b", "--domain", "deap");
+    // task.py has no blocked_by sugar yet — patch the formal field directly.
+    const patch = (dirName: string, blockedBy: string) => {
+      const data = readTaskJson(tmp, dirName);
+      fs.writeFileSync(
+        path.join(tmp, ".trellis", "tasks", dirName, "task.json"),
+        JSON.stringify({ ...data, blocked_by: [blockedBy] }, null, 2),
+        "utf-8",
+      );
+    };
+    patch(a, b);
+    patch(b, a);
+
+    const r = runContext(tmp);
+
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain("无可开工票");
+    expect(r.stdout).toMatch(/ready\s*0\s*·\s*blocked\s*2/);
+  });
+
+  it("get_context omits 下一票 when no ticket is active", () => {
+    seedDomains(tmp);
+    makeBoard(tmp, "deap");
+
+    const r = runContext(tmp);
+
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain("当前战线");
+    expect(r.stdout).not.toContain("下一票");
+  });
+
+  it("get_context omits 下一票 without the domains layer (gated section)", () => {
+    createTask(tmp, "no-domains-next");
+
+    const r = runContext(tmp);
+
+    expect(r.status).toBe(0);
+    expect(r.stdout).not.toContain("下一票");
+  });
 });

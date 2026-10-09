@@ -7624,11 +7624,34 @@ print(len(entries))
     );
   });
 
-  it("[workflow-state-r3-completed] template workflow.md [workflow-state:completed] block is present and well-formed", () => {
-    const wf = templateWorkflowMd();
-    expect(wf).toMatch(
-      /\[workflow-state:completed\]\s*\n[\s\S]+?\n\s*\[\/workflow-state:completed\]/,
-    );
+  it("[workflow-state-r3-completed-removed] neither workflow variant carries a [workflow-state:completed] block; no_task documents the computed `next:` pointer", () => {
+    // D2: completion has no breadcrumb block — cmd_archive flips status and
+    // moves the task dir in the same call, so the active-task pointer clears
+    // and the turn after finish-work falls back to [workflow-state:no_task],
+    // whose body carries the hook-computed `next:` frontier pointer (the
+    // post-archive re-entry). Both variants must stay in sync.
+    for (const file of ["workflow.md", "workflow-oh-my.md"]) {
+      const content = fs.readFileSync(
+        path.join(
+          path.dirname(fileURLToPath(import.meta.url)),
+          "..",
+          "src",
+          "templates",
+          "trellis",
+          file,
+        ),
+        "utf-8",
+      );
+      expect(content, file).not.toContain("[workflow-state:completed]");
+      const match = content.match(
+        /\[workflow-state:no_task\]([\s\S]*?)\[\/workflow-state:no_task\]/,
+      );
+      expect(match, file).toBeTruthy();
+      const body = match ? match[1] : "";
+      expect(body, file).toContain("the dependency frontier's head");
+      expect(body, file).toContain("`task.py frontier`");
+    }
+    expect(templateWorkflowMd()).not.toContain("[workflow-state:completed]");
   });
 
   it("[strip-breadcrumb] _strip_breadcrumb_tag_blocks only strips matched STATUS pairs (backreference parity with parser)", () => {
