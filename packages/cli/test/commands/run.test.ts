@@ -14,7 +14,9 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  isProtectedPath,
   normalizeOptions,
+  parsePorcelain,
   refAllowed,
   runLoop,
   type FrontierEntry,
@@ -39,6 +41,8 @@ interface Script {
   verifyVerified?: boolean;
   /** How many commits the worker left ahead of base (default 1). */
   commitsAhead?: number;
+  /** Uncommitted paths the worker left in the tree (`git status --porcelain`). */
+  dirty?: string[];
   /** Directories whose worktree already exists before the run starts. */
   existingWorktrees?: string[];
   /** Directories whose branch already archived them (a previous run). */
@@ -52,6 +56,7 @@ interface Harness {
   ghCalls: string[][];
   workerRequests: WorkerRequest[];
   pushed: string[][];
+  stagingCalls: string[][];
   ledger: LedgerInput[];
   logs: string[];
   worktreeAdds: number;
@@ -77,6 +82,7 @@ function harness(script: Script = {}): Harness {
     ghCalls: [],
     workerRequests: [],
     pushed: [],
+    stagingCalls: [],
     ledger: [],
     logs: [],
     worktreeAdds: 0,
@@ -140,6 +146,13 @@ function harness(script: Script = {}): Harness {
       }
       if (verb === "rev-parse") return ok(`${OID}\n`);
       if (verb === "rev-list") return ok(`${script.commitsAhead ?? 1}\n`);
+      if (verb === "status") {
+        return ok((script.dirty ?? []).map((p) => `?? ${p}`).join("\n"));
+      }
+      if (verb === "add" || verb === "commit") {
+        h.stagingCalls.push(args);
+        return ok();
+      }
       if (verb === "push") {
         h.pushed.push(args);
         return ok();
@@ -428,10 +441,9 @@ describe("runLoop — the stop lines", () => {
       .toBe(true);
   });
 
-  it("fails the ticket when the worker reports done but commits nothing", async () => {
-    // A worker that says "done" without a commit is exactly the case that has no
-    // evidence left behind once its channel is pruned — so the report goes into
-    // the failure reason instead of being lost.
+  it("fails the ticket when the worker neither committed nor changed the tree", async () => {
+    // The worker's closing line goes into the reason: its channel is pruned on
+    // success, so without this a no-op run leaves no trace of what it claimed.
     const h = harness({ ready: [{ dir: "01-01-alpha" }], commitsAhead: 0 });
     const result = await runLoop({ ...baseOptions(), failThreshold: 1 }, h.ports);
 
@@ -439,7 +451,77 @@ describe("runLoop — the stop lines", () => {
     expect(result.archived).toBe(0);
     expect(h.taskCalls.some((c) => c.args[0] === "archive")).toBe(false);
     expect(h.ledger.find((l) => l.action === "blocked")?.reason).toMatch(
-      /no_commit\(worker reported: implemented and committed/,
+      /no_work.*worker reported: implemented and committed/,
+    );
+  });
+
+  it("commits what a sandboxed worker left uncommitted", async () => {
+    // codex keeps `.git` read-only in workspace-write: the files land, the
+    // commit cannot. Staging is by explicit pathspec, never `git add -A`.
+    const h = harness({ ready: [{ dir: "01-01-alpha" }], commitsAhead: 0, dirty: ["greet.txt"] });
+    const result = await runLoop(baseOptions(), h.ports);
+
+    expect(result.archived).toBe(1);
+    expect(h.stagingCalls[0]).toEqual(["add", "--", "greet.txt"]);
+    expect(h.stagingCalls[1]?.[0]).toBe("commit");
+    const worker = h.ledger.find((l) => l.action === "worker");
+    expect(worker?.detail).toMatch(/runner staged 1 path\(s\)/);
+  });
+
+  it("leaves task bookkeeping out of the work commit so it stays revertable", async () => {
+    // Claiming a ticket rewrites its own task.json/*.jsonl, and `archive` moves
+    // exactly those files. Folding both into one commit makes the work commit
+    // un-revertable (rename/delete conflict) — proven on the live run.
+    const h = harness({
+      ready: [{ dir: "01-01-alpha" }],
+      commitsAhead: 0,
+      dirty: [".trellis/tasks/01-01-alpha/task.json", "greet.txt"],
+    });
+    const result = await runLoop(baseOptions(), h.ports);
+
+    expect(result.archived).toBe(1);
+    expect(h.stagingCalls[0]).toEqual(["add", "--", "greet.txt"]);
+    expect(h.ledger.find((l) => l.action === "worker")?.detail).toMatch(
+      /left 1 task-bookkeeping path\(s\) for the archive commit/,
+    );
+  });
+
+  it("calls a bookkeeping-only run what it is: no work", async () => {
+    const h = harness({
+      ready: [{ dir: "01-01-alpha" }],
+      commitsAhead: 0,
+      dirty: [".trellis/tasks/01-01-alpha/check.jsonl"],
+    });
+    const result = await runLoop({ ...baseOptions(), failThreshold: 1 }, h.ports);
+
+    expect(result.stopped).toBe("fail_threshold");
+    expect(h.stagingCalls).toEqual([]);
+    expect(h.ledger.find((l) => l.action === "blocked")?.reason).toMatch(
+      /only task bookkeeping changed/,
+    );
+  });
+
+  it("does not touch staging when the worker committed itself", async () => {
+    const h = harness({ ready: [{ dir: "01-01-alpha" }], dirty: ["stray.txt"] });
+    const result = await runLoop(baseOptions(), h.ports);
+
+    expect(result.archived).toBe(1);
+    expect(h.stagingCalls).toEqual([]);
+  });
+
+  it("refuses to commit a protected path out of the tree", async () => {
+    const h = harness({
+      ready: [{ dir: "01-01-alpha" }],
+      commitsAhead: 0,
+      dirty: [".env.local", "src/app.ts"],
+    });
+    const result = await runLoop({ ...baseOptions(), failThreshold: 1 }, h.ports);
+
+    expect(result.stopped).toBe("fail_threshold");
+    expect(h.stagingCalls).toEqual([]);
+    expect(h.taskCalls.some((c) => c.args[0] === "archive")).toBe(false);
+    expect(h.ledger.find((l) => l.action === "blocked")?.reason).toMatch(
+      /protected_path_in_tree\(\.env\.local/,
     );
   });
 
@@ -452,6 +534,26 @@ describe("runLoop — the stop lines", () => {
     expect(h.ledger.some((l) => l.action === "blocked" && /no_branch_metadata/.test(l.reason ?? ""))).toBe(
       true,
     );
+  });
+});
+
+describe("parsePorcelain / isProtectedPath — the fallback commit's inputs", () => {
+  it("reads modified, untracked and renamed paths", () => {
+    expect(
+      parsePorcelain([" M src/a.ts", "?? greet.txt", "R  old.ts -> new.ts", ""].join("\n")),
+    ).toEqual(["src/a.ts", "greet.txt", "new.ts"]);
+  });
+
+  it("unquotes paths with spaces", () => {
+    expect(parsePorcelain('?? "my file.txt"')).toEqual(["my file.txt"]);
+  });
+
+  it("flags board files and credential-shaped names", () => {
+    expect(isProtectedPath(".trellis/domains/deap/README.md")).toBe(true);
+    expect(isProtectedPath(".env.local")).toBe(true);
+    expect(isProtectedPath("keys/deploy.pem")).toBe(true);
+    expect(isProtectedPath("src/greeting.ts")).toBe(false);
+    expect(isProtectedPath(".trellis/tasks/10-09-greet/prd.md")).toBe(false);
   });
 });
 

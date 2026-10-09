@@ -226,6 +226,115 @@ function curateContext(dir: string, worktree: string, ports: RunnerPorts): void 
   }
 }
 
+/**
+ * Paths a fallback commit must never sweep in. The runner stages by explicit
+ * pathspec (never `git add -A`), and anything matching these stops the ticket
+ * instead — a board file or a secret in the working tree is a human's call, not
+ * an unattended commit's.
+ */
+const PROTECTED_FRAGMENTS = [
+  ".trellis/domains/",
+  ".env",
+  ".pem",
+  ".key",
+  "id_rsa",
+  ".git-credentials",
+  "credentials.json",
+  ".keystore",
+  "secret",
+];
+
+export function isProtectedPath(p: string): boolean {
+  const lower = p.toLowerCase().replace(/\\/g, "/");
+  return PROTECTED_FRAGMENTS.some((frag) => lower.includes(frag));
+}
+
+/** `git status --porcelain` → the changed paths, renames resolved to target. */
+export function parsePorcelain(out: string): string[] {
+  const files: string[] = [];
+  for (const line of out.split("\n")) {
+    if (!line.trim()) continue;
+    const body = line.slice(3);
+    const target = body.includes(" -> ") ? (body.split(" -> ").pop() as string) : body;
+    const trimmed = target.trim();
+    files.push(
+      trimmed.startsWith('"') && trimmed.endsWith('"')
+        ? trimmed.slice(1, -1).replace(/\\"/g, '"')
+        : trimmed,
+    );
+  }
+  return files;
+}
+
+/**
+ * Task-tree paths the runner must not fold into the work commit: claiming a
+ * ticket rewrites its own `task.json` / `*.jsonl`, and `task.py archive` moves
+ * exactly those files afterwards. Committing both in one commit makes the work
+ * commit un-revertable (rename/delete conflict), and 「每票一 commit 可单独
+ * revert」 is the whole point of the ledger.
+ */
+const BOOKKEEPING_PREFIXES = [".trellis/tasks/", ".trellis/.runtime/"];
+
+function isBookkeeping(p: string): boolean {
+  const norm = p.toLowerCase().replace(/\\/g, "/");
+  return BOOKKEEPING_PREFIXES.some((frag) => norm.startsWith(frag));
+}
+
+type FallbackCommit =
+  | { ok: true; paths: string[]; bookkeeping: number; oid: string }
+  | { ok: false; reason: string };
+
+/**
+ * Commit what the worker left uncommitted. A sandboxed worker (codex
+ * `workspace-write` keeps `.git` read-only) can write files but not commit
+ * them; without this the ticket would fail for a reason that has nothing to do
+ * with the work. Staging is by explicit pathspec so a stray protected file
+ * stops the ticket rather than riding into the review.
+ */
+function runnerFallbackCommit(
+  dir: string,
+  worktree: string,
+  ports: RunnerPorts,
+): FallbackCommit {
+  const status = ports.git(["status", "--porcelain"], worktree);
+  if (status.status !== 0) {
+    return { ok: false, reason: `status_failed(${firstLine(status.stderr || status.stdout)})` };
+  }
+  const changed = parsePorcelain(status.stdout);
+  const paths = changed.filter((p) => !isBookkeeping(p));
+  const bookkeeping = changed.length - paths.length;
+  if (paths.length === 0) {
+    return {
+      ok: false,
+      reason: changed.length === 0
+        ? "no_work(worker neither committed nor changed the tree)"
+        : `no_work(only task bookkeeping changed: ${changed.length} path(s); the worker committed nothing)`,
+    };
+  }
+  const blocked = paths.filter(isProtectedPath);
+  if (blocked.length > 0) {
+    return {
+      ok: false,
+      reason: `protected_path_in_tree(${blocked.slice(0, 3).join(", ")}; stage by hand)`,
+    };
+  }
+
+  const staged = ports.git(["add", "--", ...paths], worktree);
+  if (staged.status !== 0) {
+    return { ok: false, reason: `stage_failed(${firstLine(staged.stderr || staged.stdout)})` };
+  }
+  const committed = ports.git(
+    ["commit", "-m", `run(${dir}): worker output committed by the runner`],
+    worktree,
+  );
+  if (committed.status !== 0) {
+    return { ok: false, reason: `commit_failed(${firstLine(committed.stderr || committed.stdout)})` };
+  }
+
+  const head = ports.git(["rev-parse", "HEAD"], worktree);
+  return { ok: true, paths, bookkeeping, oid: head.stdout.trim() };
+}
+
 async function processOne(
   entry: FrontierEntry,
   opts: RunOptions,
@@ -310,23 +419,41 @@ async function runAttempt(
     };
   }
 
-  const head = ports.git(["rev-parse", "HEAD"], worktree);
-  const ahead = ports.git(["rev-list", "--count", `${base}..HEAD`], worktree);
-  const commits = Number.parseInt((ahead.stdout || "").trim(), 10);
-  // The worker's closing line goes into the ledger because the channel that
-  // carried it is removed on success — without this, a worker that reports
-  // "done" while committing nothing leaves no trace of what it thought it did.
   const report = firstLine(outcome.text);
-  if (head.status !== 0 || !Number.isFinite(commits) || commits === 0) {
-    return { kind: "failed", reason: `no_commit(worker reported: ${report || "nothing"})` };
+  let oid = ports.git(["rev-parse", "HEAD"], worktree).stdout.trim();
+  let commits = Number.parseInt(
+    (ports.git(["rev-list", "--count", `${base}..HEAD`], worktree).stdout || "").trim(),
+    10,
+  );
+  let stagedByRunner = "";
+
+  if (!Number.isFinite(commits) || commits === 0) {
+    const fallback = runnerFallbackCommit(dir, worktree, ports);
+    if (!fallback.ok) {
+      return {
+        kind: "failed",
+        reason: `${fallback.reason} (worker reported: ${report || "nothing"})`,
+      };
+    }
+    stagedByRunner =
+      `runner staged ${fallback.paths.length} path(s)` +
+      (fallback.bookkeeping > 0
+        ? `, left ${fallback.bookkeeping} task-bookkeeping path(s) for the archive commit`
+        : "") +
+      "; ";
+    oid = fallback.oid;
+    commits = Number.parseInt(
+      (ports.git(["rev-list", "--count", `${base}..HEAD`], worktree).stdout || "0").trim(),
+      10,
+    );
   }
-  const oid = head.stdout.trim();
+
   ports.ledgerAppend({
     ticket: dir,
     action: "worker",
     worker: outcome.worker,
     commit: oid,
-    detail: `${commits} commit(s) ahead of ${base}; report: ${report || "-"}`,
+    detail: `${stagedByRunner}${commits} commit(s) ahead of ${base}; report: ${report || "-"}`,
   });
 
   const verify = ports.task(["run-verify", dir, "--json"], worktree);
