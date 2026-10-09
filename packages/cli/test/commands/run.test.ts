@@ -624,6 +624,13 @@ describe("runLoop — dry run", () => {
     expect(h.logs.join("\n")).toContain("01-01-alpha");
   });
 
+  it("filters the frontier by board before choosing a head", async () => {
+    const h = harness({ ready: [{ dir: "01-01-alpha" }] });
+    await runLoop(baseOptions({ board: "deap", dryRun: true }), h.ports);
+
+    expect(h.taskCalls[0]?.args).toEqual(["frontier", "--json", "--board", "deap"]);
+  });
+
   it("prints the delivery mode it would use", async () => {
     const h = harness({ ready: [{ dir: "01-01-alpha" }], remote: true });
     await runLoop(baseOptions({ dryRun: true, allowPush: "feature/*" }), h.ports);
