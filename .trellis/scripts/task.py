@@ -268,6 +268,17 @@ def cmd_start(args: argparse.Namespace) -> int:
         )
         return 1
 
+    # CLAI-7: planning artifacts must be complete before work starts — a
+    # routed task needs its prd `Domain:` line, a verify_required repo needs
+    # the verification contract. Refusing now beats stalling at archive.
+    artifact_problems = clai_delta.start_artifact_problems(task_json_path, repo_root)
+    if artifact_problems:
+        print(colored("Error: start refused — planning artifacts incomplete:", Colors.RED))
+        for problem in artifact_problems:
+            print(f"  - {problem}")
+        print("  Fix the artifacts above, then retry start.")
+        return 1
+
     if not resolve_context_key():
         # Degraded mode: no session identity available.
         # Hook didn't inject TRELLIS_CONTEXT_ID (common on Windows + Claude Code,

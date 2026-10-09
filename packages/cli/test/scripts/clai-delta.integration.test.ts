@@ -179,6 +179,15 @@ function createTask(repo: string, slug: string, ...extra: string[]): string {
   return findTaskDir(repo, slug);
 }
 
+/** Rewrite prd.md with a single `Domain:` line atop the fixture body. */
+function writePrdDomain(repo: string, dirName: string, line: string): void {
+  fs.writeFileSync(
+    path.join(repo, ".trellis", "tasks", dirName, "prd.md"),
+    `# ${dirName}\n\n${line}\n\n## Goal\n\nfixture\n`,
+    "utf-8",
+  );
+}
+
 describe.skipIf(PYTHON === null)("clai-delta (domains layer CLI)", () => {
   let tmp: string;
 
@@ -246,6 +255,7 @@ describe.skipIf(PYTHON === null)("clai-delta (domains layer CLI)", () => {
       flag: flagLine(FOREIGN_WRITER, "old-task", STALE_TIMESTAMP),
     });
     const dir = createTask(tmp, "stale-flag-task", "--domain", "deap");
+    writePrdDomain(tmp, dir, "Domain: .trellis/domains/deap/");
 
     const r = runTask(tmp, "start", dir);
     expect(r.status).toBe(0);
@@ -257,6 +267,7 @@ describe.skipIf(PYTHON === null)("clai-delta (domains layer CLI)", () => {
       flag: flagLine(WRITER, "self-task", freshTimestamp()),
     });
     const dir = createTask(tmp, "own-flag-task", "--domain", "deap");
+    writePrdDomain(tmp, dir, "Domain: .trellis/domains/deap/");
 
     const r = runTask(tmp, "start", dir);
     expect(r.status).toBe(0);
@@ -266,6 +277,7 @@ describe.skipIf(PYTHON === null)("clai-delta (domains layer CLI)", () => {
     seedDomains(tmp);
     makeBoard(tmp, "deap");
     const dir = createTask(tmp, "no-flag-task", "--domain", "deap");
+    writePrdDomain(tmp, dir, "Domain: .trellis/domains/deap/");
 
     const r = runTask(tmp, "start", dir);
     expect(r.status).toBe(0);
@@ -344,6 +356,7 @@ describe.skipIf(PYTHON === null)("clai-delta (domains layer CLI)", () => {
     const flag = flagLine(WRITER, "self-task", freshTimestamp());
     makeBoard(tmp, "deap", { flag });
     const dir = createTask(tmp, "finish-flag-task", "--domain", "deap");
+    writePrdDomain(tmp, dir, "Domain: .trellis/domains/deap/");
     expect(runTask(tmp, "start", dir).status).toBe(0);
 
     const r = runTask(tmp, "finish");

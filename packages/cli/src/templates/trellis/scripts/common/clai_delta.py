@@ -3,8 +3,8 @@
 
 This file is the single place the CLAI (ClaiDevSkill) fork diverges from
 upstream Trellis in script logic. Call sites stay thin: one or two lines in
-`task.py` (start gate / finish warn), `common/task_store.py` (create sugar /
-archive warn), `common/task_context.py` (validate reconcile), and
+`task.py` (start gates / finish warn), `common/task_store.py` (create sugar /
+archive gates), `common/task_context.py` (validate reconcile), and
 `common/session_context.py` (context rendering) delegate here.
 
 CLAI DELTA LIST (numbered for the contract document — when an upstream
@@ -36,6 +36,16 @@ CLAI DELTA LIST (numbered for the contract document — when an upstream
     CLAI-6  get_context 当前模式 (autonomy) line
             Reads .trellis/config.yaml `autonomy:`; `gated` | `hands-off`,
             default hands-off when the key is absent or unrecognized.
+    CLAI-7  start artifact gate + archive design-review gate
+            `start` refuses a routed task (meta.domain resolving to an
+            existing board) whose prd.md lacks a well-formed `Domain:` line,
+            and — in `verify_required: true` repos — a task without a
+            verification contract. `archive` refuses a frontend task
+            (meta.frontend, else best-effort branch-diff detection) whose
+            implement.md lacks a `## Design review` section.
+            Scoping rule: fires only on positive routing intent — a task
+            with neither meta.domain nor a `Domain:` line passes, so
+            pre-domain-layer tickets are never retro-locked.
 
 Writer identity (own-writer matching): `TRELLIS_WRITER` env var wins;
 otherwise `devin-<hostname>` — the convention used by Devin agents in
@@ -55,6 +65,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from . import git
 from .io import read_json_checked, write_json
 from .log import Colors, colored
 from .paths import DIR_WORKFLOW
@@ -523,3 +534,202 @@ def append_domain_context(lines: list[str], repo_root: Path) -> None:
     if section:
         lines.extend(section)
         lines.append("")
+
+
+# =============================================================================
+# CLAI-7 — start artifact gate + archive design-review gate
+# =============================================================================
+
+FILE_PRD = "prd.md"
+FILE_IMPLEMENT = "implement.md"
+# The `Domain:` line lives atop prd.md (DISCIPLINE §1 / workflow §1.5); a
+# bounded head scan avoids matching a stray mention deeper in the body.
+PRD_DOMAIN_SCAN_LINES = 40
+
+_DOMAIN_LINE_RE = re.compile(r"^\s*Domain\s*[:：]\s*(.+?)\s*$")
+_DOMAIN_PATH_RE = re.compile(r"\.trellis/domains/([a-z0-9][a-z0-9-]*)/?")
+# `none（<reason>）` — the reason is mandatory; parens may be full- or
+# half-width. A bare `none` is a shape error, not a valid declaration.
+_DOMAIN_NONE_RE = re.compile(r"none\s*[（(]\s*\S.*?[）)]\s*$", re.IGNORECASE)
+
+# frontend-craft contract: a task is frontend when the files it touched match
+# its `paths:` globs, or meta.frontend says so. Mechanical detection keeps the
+# same two signals — the meta override, else the task branch's diff.
+_DESIGN_REVIEW_RE = re.compile(r"^#{2,}\s+Design review\b", re.MULTILINE)
+FRONTEND_SUFFIXES = frozenset(
+    (".tsx", ".jsx", ".vue", ".svelte", ".astro", ".css", ".scss", ".less", ".html")
+)
+FRONTEND_SPEC_PATHS = frozenset(
+    (".trellis/spec/product.md", ".trellis/spec/design-system.md")
+)
+
+
+def read_prd_domain_value(prd_path: Path) -> str | None:
+    """Return the `Domain:` line's value from atop prd.md, or None (absent)."""
+    try:
+        with Path(prd_path).open("r", encoding="utf-8") as fh:
+            head = [next(fh, "") for _ in range(PRD_DOMAIN_SCAN_LINES)]
+    except OSError:
+        return None
+    for line in head:
+        match = _DOMAIN_LINE_RE.match(line)
+        if match:
+            return match.group(1).strip()
+    return None
+
+
+def classify_domain_value(value: str) -> str | None:
+    """Classify a `Domain:` value: 'board' | 'none'; None when malformed."""
+    if _DOMAIN_PATH_RE.fullmatch(value):
+        return "board"
+    if _DOMAIN_NONE_RE.fullmatch(value):
+        return "none"
+    return None
+
+
+def start_artifact_problems(task_json_path: Path, repo_root: Path) -> list[str]:
+    """CLAI-7: artifact problems that refuse `start` ([] = pass).
+
+    Fires on routing intent, not on every task: either meta.domain resolves
+    to a board, or prd.md carries a `Domain:` line (shape-checked). Tasks
+    with neither pass — pre-domain-layer tickets (Laber/Rakazo history) are
+    never retro-locked by a `trellis update`.
+
+    In a `verify_required: true` repo a missing verification contract also
+    refuses start: the same opt-in that makes archive refuse should fail
+    before the work, not after it. A contract that exists and fails stays
+    the archive gate's business.
+    """
+    json_path = Path(task_json_path)
+    data, _reason = read_json_checked(json_path)
+    if not isinstance(data, dict):
+        data = {}
+
+    domain: str | None = None
+    meta = data.get("meta")
+    if isinstance(meta, dict):
+        candidate = meta.get("domain")
+        if isinstance(candidate, str) and candidate.strip():
+            domain = candidate.strip()
+    routed = board_dir_for(repo_root, domain) is not None
+
+    problems: list[str] = []
+    prd_path = json_path.parent / FILE_PRD
+    prd_exists = prd_path.is_file()
+    value = read_prd_domain_value(prd_path) if prd_exists else None
+
+    if routed or value is not None:
+        if not prd_exists:
+            problems.append(
+                f"prd.md is missing — this task is routed (meta.domain={domain}) "
+                "and must carry a `Domain:` line atop its prd."
+            )
+        elif value is None:
+            problems.append(
+                f"prd.md has no `Domain:` line — meta.domain={domain} routes "
+                "this task to a board. Add one of:\n"
+                f"    Domain: .trellis/domains/{domain}/\n"
+                "    Domain: none（<one-line reason>）"
+            )
+        elif classify_domain_value(value) is None:
+            problems.append(
+                f"malformed `Domain:` line: '{value}' — use "
+                "`.trellis/domains/<slug>/` or `none（<one-line reason>）` "
+                "(a bare slug is neither form)."
+            )
+
+    from . import verify as verify_module  # local: verify imports clai_delta
+
+    if verify_module.verify_required(repo_root):
+        specs, _shape_problems = verify_module.verify_specs(data)
+        if not specs:
+            problems.append(
+                "no verification contract — this repo sets "
+                "`verify_required: true`. Record one first: "
+                "task.py add-verify <task> '<command>'"
+            )
+
+    return problems
+
+
+def _tri_state(value: object) -> bool | None:
+    """Coerce a meta.frontend value: True/False, or None when unset/opaque."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in ("true", "yes", "1"):
+            return True
+        if lowered in ("false", "no", "0"):
+            return False
+    return None
+
+
+def _frontend_by_branch_diff(repo_root: Path, task_data: dict) -> bool:
+    """Best-effort: did this task's branch touch frontend files?
+
+    False when undetectable (no branch metadata, refs gone, git unavailable)
+    — an unknowable frontend-ness must not block archive. The automation
+    path keeps the branch alive, so detection works where it matters.
+    """
+    branch = task_data.get("branch")
+    base = task_data.get("base_branch")
+    if not (
+        isinstance(branch, str)
+        and branch.strip()
+        and isinstance(base, str)
+        and base.strip()
+        and branch.strip() != base.strip()
+    ):
+        return False
+    rc, out, _err = git.run_git(
+        ["merge-base", base.strip(), branch.strip()], cwd=repo_root, timeout=30
+    )
+    if rc != 0 or not out.strip():
+        return False
+    base_oid = out.strip().splitlines()[0].strip()
+    rc, out, _err = git.run_git(
+        ["diff", "--name-only", base_oid, branch.strip()], cwd=repo_root, timeout=30
+    )
+    if rc != 0:
+        return False
+    for raw in out.splitlines():
+        name = raw.strip().replace("\\", "/")
+        if not name:
+            continue
+        if name in FRONTEND_SPEC_PATHS:
+            return True
+        if os.path.splitext(name)[1].lower() in FRONTEND_SUFFIXES:
+            return True
+    return False
+
+
+def frontend_design_problems(
+    task_data: dict, task_dir: Path, repo_root: Path
+) -> list[str]:
+    """CLAI-7 archive gate: frontend tasks need `## Design review` recorded.
+
+    Frontend-ness follows the frontend-craft contract: `meta.frontend`
+    overrides both ways; absent an explicit value, best-effort branch-diff
+    detection applies. The fix is the artifact, not a flag — write the
+    section (an explicit skip justification inside it counts).
+    """
+    meta = task_data.get("meta")
+    marked = _tri_state(meta.get("frontend")) if isinstance(meta, dict) else None
+    if marked is False:
+        return []
+    if marked is None and not _frontend_by_branch_diff(repo_root, task_data):
+        return []
+    implement_path = Path(task_dir) / FILE_IMPLEMENT
+    try:
+        text = implement_path.read_text(encoding="utf-8")
+    except OSError:
+        text = ""
+    if _DESIGN_REVIEW_RE.search(text):
+        return []
+    return [
+        "frontend task without a `## Design review` section in implement.md — "
+        "record which of audit/critique/polish ran (engine or degraded), the "
+        "findings, and each disposition (fixed / deferred / rejected); an "
+        "empty \"no findings\" entry is valid only if the commands ran."
+    ]

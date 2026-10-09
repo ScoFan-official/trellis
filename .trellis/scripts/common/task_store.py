@@ -1380,6 +1380,19 @@ def cmd_archive(args: argparse.Namespace) -> int:
                 )
                 return 1
 
+            # CLAI-7: a frontend task must record its design review before it
+            # can archive — the frontend-craft contract's `## Design review`
+            # section, mechanized.
+            design_problems = clai_delta.frontend_design_problems(data, task_dir, repo_root)
+            if design_problems:
+                for problem in design_problems:
+                    print(colored(f"Error: {problem}", Colors.RED), file=sys.stderr)
+                print(
+                    f"Not archived: {_repo_relative_path(task_dir, repo_root)} is unchanged.",
+                    file=sys.stderr,
+                )
+                return 1
+
             data["status"] = "completed"
             data["completedAt"] = today
             if not write_json(task_json_path, data):
