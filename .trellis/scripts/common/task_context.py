@@ -207,18 +207,20 @@ def cmd_validate(args: argparse.Namespace) -> int:
     total_errors = 0
 
     # A malformed `verify` entry would silently disable the archive gate, so it
-    # is a validation error rather than a note. An absent contract is only a
-    # warning — gated autonomy archives without one by design.
+    # is a validation error rather than a note. An absent contract is only
+    # surfaced when the project opted in via `verify_required: true` —
+    # unconditional warnings would break the upstream contract that a clean
+    # manifest validates warning-free.
     if verify_source is not None:
         specs, shape_problems = verify.verify_specs(verify_source)
         for problem in shape_problems:
             print(colored(f"Error: {problem}", Colors.RED))
             total_errors += 1
-        if not specs and not shape_problems:
+        if not specs and not shape_problems and verify.verify_required(repo_root):
             print(
                 colored(
-                    "Warning: no verification contract — archive only warns unless "
-                    "`verify_required: true` is set in .trellis/config.yaml.",
+                    "Warning: no verification contract — `verify_required: true` is set "
+                    "in .trellis/config.yaml and `archive` will refuse this task.",
                     Colors.YELLOW,
                 )
             )

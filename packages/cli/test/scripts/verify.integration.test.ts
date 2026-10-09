@@ -319,8 +319,22 @@ describe("validate shape checks", () => {
     expect(r.stdout).toContain("missing a non-empty 'cmd'");
   });
 
-  it("warns when a task has no contract at all", () => {
+  it("stays silent about a missing contract unless verify_required is on", () => {
+    // Upstream contract: a clean manifest validates warning-free. The
+    // missing-contract note must be opt-in, matching the archive gate.
     const dir = createTask("s-two");
+    const r = runTask("validate", dir);
+    expect(r.status).toBe(0);
+    expect(r.stdout).not.toContain("no verification contract");
+  });
+
+  it("warns about a missing contract when verify_required is on", () => {
+    const dir = createTask("s-three");
+    fs.writeFileSync(
+      path.join(repo, ".trellis", "config.yaml"),
+      "verify_required: true\n",
+      "utf-8",
+    );
     const r = runTask("validate", dir);
     expect(r.stdout).toContain("no verification contract");
     expect(r.stdout).toContain("verify_required: true");
