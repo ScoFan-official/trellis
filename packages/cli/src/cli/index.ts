@@ -12,6 +12,8 @@ import {
   runWorkflowCommand,
   WorkflowCommandError,
 } from "../commands/workflow.js";
+import { runCommand as runLoopCommand } from "../commands/run.js";
+import { listProviders } from "../commands/channel/adapters/index.js";
 import { registerChannelCommand } from "../commands/channel/index.js";
 import { DIR_NAMES } from "../constants/paths.js";
 import { PACKAGE_NAME, VERSION } from "../constants/version.js";
@@ -382,6 +384,57 @@ program
       console.log(chalk.bold("Configured platforms:"));
       for (const p of platforms) {
         console.log(`  ${p.displayName} (${p.id}) — ${p.configDir}`);
+      }
+    } catch (error) {
+      console.error(
+        chalk.red("Error:"),
+        error instanceof Error ? error.message : error,
+      );
+      if (process.env.DEBUG || process.env.TRELLIS_DEBUG) {
+        console.error(error instanceof Error ? error.stack : error);
+      }
+      process.exit(1);
+    }
+  });
+
+// [oh-my] D5 — unattended loop runner. Distinct verb from `channel run`
+// (one-shot worker); this one drives the frontier ticket by ticket.
+program
+  .command("run")
+  .description(
+    "Unattended loop: take the frontier head, implement it in its own worktree, verify, and record a run ledger. Delivery is opt-in.",
+  )
+  .option("--until-empty", "Keep taking tickets until the frontier has nothing ready")
+  .option("--board <slug>", "Restrict the loop to one domain board (meta.domain)")
+  .option("--max-tickets <n>", "Ticket attempts per run (default 5)")
+  .option("--max-failures <n>", "Consecutive failures on one ticket before the line halts (default 3)")
+  .option("--dry-run", "Print the selected ticket and the planned actions; write nothing at all")
+  .option(
+    "--provider <name>",
+    `Headless worker provider (${listProviders().join(", ")})`,
+  )
+  .option("--agent <name>", "Agent definition to run as (supplies the provider)")
+  .option("--model <name>", "Model override passed to the provider")
+  .option("--timeout <duration>", "Per-worker timeout, e.g. 20m (default 30m)")
+  .option(
+    "--allow-push <ref-globs>",
+    "Comma-separated ref whitelist. Without it the runner never pushes and never opens a PR.",
+  )
+  .action(async (options: Record<string, unknown>) => {
+    try {
+      const result = await runLoopCommand(options, cwd);
+      console.log(
+        `stopped=${result.stopped} attempted=${result.attempted} ` +
+          `archived=${result.archived} failed=${result.failed}` +
+          (result.ledgerFile ? ` ledger=${result.ledgerFile}` : ""),
+      );
+      if (
+        result.stopped === "cycle" ||
+        result.stopped === "frontier_error" ||
+        result.stopped === "fail_threshold" ||
+        result.stopped === "push_refused"
+      ) {
+        process.exitCode = 1;
       }
     } catch (error) {
       console.error(
