@@ -11149,7 +11149,15 @@ describe("regression: safe auto-commit when .trellis/ is gitignored (0.5.10 → 
   });
 
   afterEach(() => {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+    // Git can still hold files (gc / index writes) for a moment after the
+    // last commit; a bare rmdir races that and intermittently throws
+    // ENOTEMPTY on CI (main run 37620869172).
+    fs.rmSync(tmpDir, {
+      recursive: true,
+      force: true,
+      maxRetries: 5,
+      retryDelay: 100,
+    });
   });
 
   function writeFile(rel: string, content: string): void {

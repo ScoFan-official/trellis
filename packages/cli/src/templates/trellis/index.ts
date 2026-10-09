@@ -76,8 +76,9 @@ export const addSessionScript = readTemplate("scripts/add_session.py");
 // Configuration files
 export const workflowMdTemplate = readTemplate("workflow.md");
 // [oh-my] Fork's default workflow — Laber's variant with Devin `run_subagent`
-// dispatch blocks ([Devin] markers). Bundled alongside the upstream `native`
-// template; `workflow.md` itself stays byte-identical to upstream.
+// dispatch blocks ([Devin] markers). Bundled alongside the `native` flavor
+// above; both carry the [oh-my] domain-routing / autonomy delta, so neither
+// is byte-identical to upstream's `workflow.md`.
 export const ohMyWorkflowMdTemplate = readTemplate("workflow-oh-my.md");
 export const configYamlTemplate = readTemplate("config.yaml");
 export const gitignoreTemplate = readTemplate("gitignore.txt");
