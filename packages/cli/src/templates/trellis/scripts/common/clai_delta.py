@@ -19,6 +19,10 @@ CLAI DELTA LIST (numbered for the contract document — when an upstream
             (旗行), start is refused with the flag reported. Own flag or a
             stale flag (>24h) proceeds. This is the only mechanical gate in
             the flag protocol — flag insertion/removal itself stays manual.
+            Identity resolution (D8): `TRELLIS_WRITER` wins, else
+            `{platform}-{machine}` from the repo's own config dirs, so a Qoder
+            / Codex / Claude session no longer computes a Devin identity and
+            cannot mistake Devin's live flag for its own.
     CLAI-3  task.py validate domain ↔ REGISTRY reconciliation
             Every directory under .trellis/domains/ (except _scaffold) must
             have a REGISTRY.md line, and every REGISTRY line must resolve to
@@ -76,12 +80,17 @@ CLAI DELTA LIST (numbered for the contract document — when an upstream
             as a directory, URL must be http(s) — a refusal means a typo, not a
             state the runner can legitimately be in.
 
-Writer identity (own-writer matching): `TRELLIS_WRITER` env var wins;
-otherwise `devin-<hostname>` — the convention used by Devin agents in
-dogfood. A flag's writer field is an opaque string compared by equality.
-Repos whose hygiene rules ban machine identifiers in committed files
-(e.g. "no hostnames in git history") should set `TRELLIS_WRITER` to a
-neutral alias like `devin` — the protocol only needs uniqueness.
+Writer identity (own-writer matching): `TRELLIS_WRITER` env var wins; otherwise
+`{platform}-{hostname}`, the platform read from the repo's own config dirs
+(`common/cli_adapter.detect_platform`) — Devin sessions therefore keep the
+`devin-<hostname>` string they always produced. A flag's writer field is an
+opaque string compared by equality.
+Agents that name themselves with a writer suffix (`qoder-HOST-agent`, the shape
+the domain boards actually carry) must set `TRELLIS_WRITER` to that exact string
+— detection cannot guess a suffix. Repos whose hygiene rules ban machine
+identifiers in committed files (e.g. "no hostnames in git history") should set
+`TRELLIS_WRITER` to a neutral alias like `devin` — the protocol only needs
+uniqueness.
 """
 
 from __future__ import annotations
@@ -145,16 +154,32 @@ _WORKLOG_STATUS_RE = re.compile(r"^\s*-\s*\*\*状态\*\*：\s*\[([~x])\]")
 # Writer identity + slug validation (CLAI-1/2/4 shared)
 # =============================================================================
 
-def own_writer_id() -> str:
+def own_writer_id(repo_root: Path | None = None) -> str:
     """Return this session's writer identity for flag ownership checks.
 
-    `TRELLIS_WRITER` wins (explicit identity, and the deterministic fixture
-    knob); otherwise `devin-<hostname>` — the Devin dogfood convention.
+    `TRELLIS_WRITER` wins (explicit identity — the deterministic fixture knob and
+    the escape for agents that name themselves with a writer suffix, e.g.
+    `qoder-HOST-agent`; the protocol only needs the string to be stable).
+    Otherwise `{platform}-{machine}`, with the platform read from the repo's own
+    config directories by `common/cli_adapter.detect_platform`.
+
+    Before this, the identity was hard-coded to `devin-<hostname>`, so a Qoder /
+    Claude / Codex session computed a Devin identity: another agent's live flag
+    on the same machine read as its own, and `start` walked over it. Devin
+    machines keep producing the same string as before.
     """
     override = os.environ.get(ENV_WRITER, "").strip()
     if override:
         return override
-    return f"devin-{socket.gethostname()}"
+    try:
+        from .cli_adapter import detect_platform
+
+        platform = detect_platform(repo_root or Path.cwd())
+    except Exception:
+        # Detection is a convenience; failing it must not turn every existing
+        # Devin flag into a foreign one.
+        platform = "devin"
+    return f"{platform}-{socket.gethostname()}"
 
 
 def domain_slug_ok(slug: object) -> bool:
@@ -327,6 +352,10 @@ def flag_conflict(
     be verified). Own flag, stale flag (>24h), missing board/README/flag all
     proceed — a stale flag is reported on stderr as advisory.
     """
+    if own is None:
+        # Ownership is decided against this repo's platform, so the probe needs
+        # this repo's root.
+        own = own_writer_id(repo_root)
     board = board_dir_for(repo_root, slug)
     if board is None:
         return None
