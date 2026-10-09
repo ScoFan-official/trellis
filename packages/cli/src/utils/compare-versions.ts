@@ -89,16 +89,20 @@ export function compareVersions(a: string, b: string): number {
  * base — not a pre-release of it. Plain semver ranks `0.6.17-ohmy.1` below
  * `0.6.17`, which made a fork CLI report itself older than a project stamped
  * by an upstream build. This comparator compares the upstream base first
- * (full semver rules), then the oh-my counter (absent = 0). Non-oh-my
- * versions fall back to {@link compareVersions} behaviour.
+ * (full semver rules), then the presence and value of the oh-my counter:
+ * ANY `-ohmy.N` build (including `-ohmy.0`) outranks the bare base, and the
+ * bare base ranks below it. `absent` and `-ohmy.0` must NOT compare equal —
+ * that collision made `update` treat `0.6.18` → `0.6.18-ohmy.0` as "already
+ * up to date" and skip re-stamping `.version`. Non-oh-my versions fall back
+ * to {@link compareVersions} behaviour.
  */
 const OHMY_SUFFIX_RE = /-ohmy\.(\d+)$/;
 
 export function compareOhmyVersions(a: string, b: string): number {
-  const splitOhmy = (v: string): [string, number] => {
+  const splitOhmy = (v: string): [string, number | null] => {
     const normalized = v.replace(/^v/, "");
     const match = OHMY_SUFFIX_RE.exec(normalized);
-    if (!match) return [normalized, 0];
+    if (!match) return [normalized, null];
     return [normalized.slice(0, match.index), parseInt(match[1], 10)];
   };
   const [aBase, aOhmy] = splitOhmy(a);
@@ -106,6 +110,10 @@ export function compareOhmyVersions(a: string, b: string): number {
 
   const baseComparison = compareVersions(aBase, bBase);
   if (baseComparison !== 0) return baseComparison;
-  if (aOhmy !== bOhmy) return aOhmy < bOhmy ? -1 : 1;
+
+  if (aOhmy === null && bOhmy === null) return 0;
+  if (aOhmy !== null && bOhmy === null) return 1;
+  if (aOhmy === null && bOhmy !== null) return -1;
+  if (aOhmy !== bOhmy) return (aOhmy as number) < (bOhmy as number) ? -1 : 1;
   return 0;
 }

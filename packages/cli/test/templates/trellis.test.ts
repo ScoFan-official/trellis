@@ -138,6 +138,13 @@ describe("trellis template constants", () => {
   });
 
   it("marketplace native workflow mirror matches the bundled workflow", () => {
+    // [oh-my] Byte-equality is WAIVED on the fork: `marketplace/` is the
+    // upstream-owned `mindfold-ai/marketplace` submodule and our bundled
+    // `workflow.md` carries the [oh-my] delta (domain routing + [B档]/[C档]
+    // autonomy gates, see commit 51609c15), which can't be pushed into the
+    // upstream mirror. Long-term fix: fork the marketplace submodule; until
+    // then keep upstream's intent here — the seed must still be present and
+    // a real workflow, not deleted or truncated.
     const repoRoot = fs.existsSync(path.join(process.cwd(), "marketplace"))
       ? process.cwd()
       : path.resolve(process.cwd(), "../..");
@@ -145,7 +152,8 @@ describe("trellis template constants", () => {
       path.join(repoRoot, "marketplace/workflows/native/workflow.md"),
       "utf-8",
     );
-    expect(marketplaceNative).toBe(workflowMdTemplate);
+    expect(marketplaceNative).toContain("# Development Workflow");
+    expect(marketplaceNative).toContain("[workflow-state:planning]");
   });
 
   it("marketplace TDD workflow planning breadcrumbs include behavior gates", () => {

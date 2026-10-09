@@ -179,11 +179,20 @@ describe("compareOhmyVersions: oh-my builds vs upstream base", () => {
   // pre-release of it. Plain compareVersions ranks `0.6.17-ohmy.1` *below*
   // `0.6.17`, which made the CLI report itself older than a project stamped
   // by an upstream build. compareOhmyVersions compares upstream base first,
-  // then the oh-my counter (absent = 0).
+  // then the oh-my counter (present always outranks absent, including `.0`).
 
   it("ranks same-base X.Y.Z-ohmy.N above bare X.Y.Z", () => {
     expect(compareOhmyVersions("0.6.17-ohmy.1", "0.6.17")).toBe(1);
     expect(compareOhmyVersions("0.6.17", "0.6.17-ohmy.1")).toBe(-1);
+  });
+
+  it("ranks -ohmy.0 above the bare base (no absent/zero collision)", () => {
+    // The 0.6.18-ohmy.0 release: with `absent = 0` the comparator called this
+    // equal to bare `0.6.18`, so `trellis update` skipped re-stamping
+    // `.version` ("already up to date").
+    expect(compareOhmyVersions("0.6.18-ohmy.0", "0.6.18")).toBe(1);
+    expect(compareOhmyVersions("0.6.18", "0.6.18-ohmy.0")).toBe(-1);
+    expect(compareOhmyVersions("0.6.18-ohmy.0", "0.6.18-ohmy.0")).toBe(0);
   });
 
   it("orders oh-my counters numerically on the same base", () => {
