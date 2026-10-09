@@ -162,7 +162,22 @@ channel:
 #   gated      (B档) ask the user at each gate: task creation, start, commit,
 #              finish-work
 #   hands-off  (C档) auto-pass those gates — the user can veto afterwards
+#   supervised-delivery
+#              (C+档) those gates plus local commits, worktrees and ticket state
+#              transitions run automatically, and `trellis run` may push a ticket
+#              branch — but only a ref listed in `delivery.auto_push_refs`,
+#              never the default branch, never a tag, and never a merge (that
+#              stays a human click; PR ≠ delivery).
 # The four always-stop rules in .trellis/domains/DISCIPLINE.md apply under
 # either mode, and an explicit verbal stop always wins over hands-off.
 #
 # autonomy: hands-off
+#
+# Delivery detail, consulted only by supervised-delivery:
+#   delivery:
+#     auto_push_refs:          # absent/empty = no push at all (== hands-off)
+#       - "feature/*"
+#     protected_refs: []       # extra globs that are always refused
+# `*` does not cross `/`. Ask with `task.py delivery-gate <ref> --json`, which
+# reports the git facts it used (default branch, tag, remote); a protected
+# position is refused even when a whitelist glob would match it.

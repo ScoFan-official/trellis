@@ -38,8 +38,9 @@ CLAI DELTA LIST (numbered for the contract document — when an upstream
             per-turn hook appends to the no_task breadcrumb (both read
             the same common/frontier.py — no second query implementation).
     CLAI-6  get_context 当前模式 (autonomy) line
-            Reads .trellis/config.yaml `autonomy:`; `gated` | `hands-off`,
-            default hands-off when the key is absent or unrecognized.
+            Reads .trellis/config.yaml `autonomy:`; `gated` | `hands-off` |
+            `supervised-delivery`, default hands-off when the key is absent or
+            unrecognized (an unrecognized value never becomes the push tier).
     CLAI-7  start artifact gate + archive design-review gate
             `start` refuses a routed task (meta.domain resolving to an
             existing board) whose prd.md lacks a well-formed `Domain:` line,
@@ -50,6 +51,22 @@ CLAI DELTA LIST (numbered for the contract document — when an upstream
             Scoping rule: fires only on positive routing intent — a task
             with neither meta.domain nor a `Domain:` line passes, so
             pre-domain-layer tickets are never retro-locked.
+    CLAI-8  task.py delivery-gate <ref> [--json]
+            The push answer for `trellis run`, per the three-tier model in the
+            domain's `02-e2e-delivery-gate-model.md`. Decision order is
+            load-bearing: tier (`supervised-delivery` only — every other tier
+            refuses outright), then protected positions (a whitelist entry
+            never outvotes the default branch or a tag), then
+            `delivery.auto_push_refs`. Protected-ness is decided by git facts
+            (`refs/remotes/origin/HEAD` → `git remote show origin` → the main
+            tree's own HEAD when there is no remote to ask), not by platform
+            wording. Everything else is a refusal, never a warning: nobody is
+            watching. An empty or malformed whitelist fails closed — an empty
+            list is exactly `hands-off` behaviour, which is what makes the
+            upgrade safe by default.
+            Consumers of the older two-value check are unaffected: `verify.py`
+            only asks `!= "gated"`, so the third tier behaves like hands-off
+            there by design.
     CLAI-9  task.py set-worktree <dir> <path>|- / task.py set-pr <dir> <url>
             The two formal `task.json` fields the loop runner writes and no
             other command owns: `worktree_path` (declared by the schema, never
@@ -58,9 +75,6 @@ CLAI DELTA LIST (numbered for the contract document — when an upstream
             `pr_url` (the review pointer `gh pr create` prints). Path must exist
             as a directory, URL must be http(s) — a refusal means a typo, not a
             state the runner can legitimately be in.
-            (CLAI-8 is reserved for the `supervised-delivery` push whitelist
-            landing in the next slice — the gap is deliberate because the
-            contract text already cites that number.)
 
 Writer identity (own-writer matching): `TRELLIS_WRITER` env var wins;
 otherwise `devin-<hostname>` — the convention used by Devin agents in
@@ -73,6 +87,7 @@ neutral alias like `devin` — the protocol only needs uniqueness.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import socket
@@ -103,7 +118,12 @@ FILE_REGISTRY = "REGISTRY.md"
 FILE_BOARD_README = "README.md"
 
 DEFAULT_AUTONOMY = "hands-off"
-KNOWN_AUTONOMY = {"gated", "hands-off"}
+# `supervised-delivery` (CLAI-8) is the tier that may push; see KNOWN_AUTONOMY
+# readers in `02-e2e-delivery-gate-model.md` and DISCIPLINE §4.
+TIER_GATED = "gated"
+TIER_HANDS_OFF = "hands-off"
+TIER_SUPERVISED = "supervised-delivery"
+KNOWN_AUTONOMY = {TIER_GATED, TIER_HANDS_OFF, TIER_SUPERVISED}
 
 # A foreign flag older than this is 腐旗 (stale) — start proceeds; the flag
 # protocol's three-anchor evidence rules decide whether it may be replaced.
@@ -878,6 +898,167 @@ def cmd_set_worktree(args: argparse.Namespace) -> int:
     state = "cleared" if resolved is None else f"→ {resolved}"
     print(colored(f"✓ worktree_path {state}", Colors.GREEN))
     return 0
+
+
+# =============================================================================
+# CLAI-8 — the delivery tier and protected-ref mechanics (supervised-delivery)
+# =============================================================================
+
+DELIVERY_SECTION = "delivery"
+AUTO_PUSH_REFS_KEY = "auto_push_refs"
+PROTECTED_REFS_KEY = "protected_refs"
+
+
+def _ref_glob(glob: str) -> re.Pattern[str]:
+    """Compile a ref whitelist glob.
+
+    `*` stops at `/`, so `feature/*` admits `feature/ticket` but not
+    `feature/a/b`. A whitelist that allows less than it appears to allow is the
+    safe direction for something an unattended loop can trigger.
+    """
+    return re.compile("^" + "[^/]*".join(re.escape(p) for p in glob.split("*")) + "$")
+
+
+def _ref_matches(ref: str, globs: list[str]) -> str | None:
+    """The first glob that matches `ref`, or None."""
+    for glob in globs:
+        if _ref_glob(glob).match(ref):
+            return glob
+    return None
+
+
+def read_delivery_config(repo_root: Path) -> dict:
+    """`delivery:` section of config.yaml, shape-checked.
+
+    Absent keys read as empty lists. A scalar where a list belongs is reported
+    as `malformed` rather than coerced — an unparseable whitelist must not
+    silently become no whitelist or a guessed one.
+    """
+    raw = read_trellis_config(repo_root).get(DELIVERY_SECTION)
+    result = {"auto_push_refs": [], "protected_refs": [], "malformed": None}
+    if raw is None:
+        return result
+    if not isinstance(raw, dict):
+        result["malformed"] = f"{DELIVERY_SECTION} is not a mapping"
+        return result
+
+    for key, target in ((AUTO_PUSH_REFS_KEY, "auto_push_refs"), (PROTECTED_REFS_KEY, "protected_refs")):
+        value = raw.get(key)
+        if value is None:
+            continue
+        if isinstance(value, list):
+            result[target] = [str(v).strip() for v in value if str(v).strip()]
+        else:
+            result["malformed"] = f"{DELIVERY_SECTION}.{key} is not a list"
+    return result
+
+
+def default_branch_facts(repo_root: Path) -> tuple[str | None, str]:
+    """(default branch, how it was learned) — git facts only.
+
+    `git.resolve_default_branch` reads `refs/remotes/origin/HEAD` then
+    `git remote show origin`. Both fail in a repo with no remote, which is also
+    the case where nothing can be pushed at all; there the main working tree's
+    own HEAD is the only local fact that means "the branch work merges into", so
+    it is used as the fallback and reported as such.
+    """
+    resolved = git.resolve_default_branch(repo_root)
+    if resolved:
+        return resolved, "remote_head"
+    if git.has_git_remote(repo_root):
+        return None, "unresolved"
+    head = git.current_branch_name(repo_root)
+    return (head, "local_head") if head else (None, "none")
+
+
+def ref_is_tag(repo_root: Path, ref: str) -> bool:
+    """Whether `ref` names an existing tag, locally first, then on the remote."""
+    rc, _out, _err = git.run_git(
+        ["rev-parse", "--verify", "--quiet", f"refs/tags/{ref}"], cwd=repo_root
+    )
+    if rc == 0:
+        return True
+    if not git.has_git_remote(repo_root):
+        return False
+    rc, out, _err = git.run_git(
+        ["ls-remote", "--tags", "origin", f"refs/tags/{ref}"], cwd=repo_root, timeout=20
+    )
+    return rc == 0 and bool(out.strip())
+
+
+def delivery_decision(repo_root: Path, ref: str) -> tuple[bool, str, dict]:
+    """May anything push `ref`? Returns (allow, reason, facts).
+
+    Order is load-bearing: tier first (only `supervised-delivery` pushes at
+    all), then protected positions (a whitelist entry must not outvote the
+    default branch or a tag), then the whitelist itself. Everything else is a
+    refusal — a warning would be invisible to nobody in particular.
+    """
+    tier = read_autonomy(repo_root)
+    cfg = read_delivery_config(repo_root)
+    default_branch, default_source = default_branch_facts(repo_root)
+    is_tag = ref_is_tag(repo_root, ref)
+    remote = git.has_git_remote(repo_root)
+
+    facts = {
+        "tier": tier,
+        "ref": ref,
+        "remote": remote,
+        "default_branch": default_branch,
+        "default_source": default_source,
+        "is_tag": is_tag,
+        "auto_push_refs": cfg["auto_push_refs"],
+        "protected_refs": cfg["protected_refs"],
+    }
+
+    if tier != TIER_SUPERVISED:
+        return False, f"tier({tier}) — push needs supervised-delivery", facts
+    if default_branch and ref == default_branch:
+        return False, f"protected_ref(default_branch={default_branch};{default_source})", facts
+    if is_tag:
+        return False, "protected_ref(tag)", facts
+    hit_protected = _ref_matches(ref, cfg["protected_refs"])
+    if hit_protected:
+        return False, f"protected_ref(configured:{hit_protected})", facts
+    if cfg["malformed"]:
+        return False, f"malformed_auto_push_refs({cfg['malformed']})", facts
+    if not cfg["auto_push_refs"]:
+        return False, "empty_auto_push_refs(degrades to hands-off)", facts
+    hit = _ref_matches(ref, cfg["auto_push_refs"])
+    if hit:
+        return True, f"whitelist({hit})", facts
+    return False, "outside_auto_push_refs", facts
+
+
+def cmd_delivery_gate(args: argparse.Namespace) -> int:
+    """`task.py delivery-gate <ref> [--json]` — the push answer for the runner."""
+    repo_root = get_repo_root()
+    ref = str(getattr(args, "ref", "") or "").strip()
+    if not ref:
+        print(colored("Error: Missing arguments", Colors.RED))
+        print("Usage: python3 task.py delivery-gate <ref> [--json]")
+        return 1
+
+    allow, reason, facts = delivery_decision(repo_root, ref)
+
+    if getattr(args, "json", False):
+        print(
+            json.dumps(
+                {
+                    "allow": allow,
+                    "reason": reason,
+                    "tier": facts["tier"],
+                    "ref": ref,
+                    "facts": facts,
+                },
+                ensure_ascii=False,
+            )
+        )
+    elif allow:
+        print(colored(f"✓ push allowed: {ref} — {reason}", Colors.GREEN))
+    else:
+        print(colored(f"✗ push refused: {ref} — {reason}", Colors.RED))
+    return 0 if allow else 1
 
 
 def cmd_set_pr(args: argparse.Namespace) -> int:

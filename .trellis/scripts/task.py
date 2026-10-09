@@ -592,6 +592,7 @@ Usage:
   python3 task.py set-scope <dir> <scope>            Set scope for PR title
   python3 task.py set-worktree <dir> <path>|-        Record (or clear) the ticket's git worktree
   python3 task.py set-pr <dir> <url>                 Record the review PR for the ticket
+  python3 task.py delivery-gate <ref> [--json]        Decide whether this repo may push <ref> (CLAI-8)
   python3 task.py set-meta <dir> <key> <value>       Set/overwrite a task metadata key
   python3 task.py rename <dir> <new-slug>            Rename task, identity fields and references
   python3 task.py archive <task-dir>                 Archive completed task
@@ -796,6 +797,13 @@ def main() -> int:
     p_pr.add_argument("dir", help="Task directory")
     p_pr.add_argument("url", help="PR URL (http/https)")
 
+    # delivery-gate (CLAI-8 — the push answer for `trellis run`)
+    p_gate = subparsers.add_parser(
+        "delivery-gate", help="May this repo push the given ref?"
+    )
+    p_gate.add_argument("ref", help="Ref name to decide on, e.g. a ticket branch")
+    p_gate.add_argument("--json", action="store_true", help="Output machine-readable JSON")
+
     # set-meta
     p_setmeta = subparsers.add_parser("set-meta", help="Set/overwrite a task metadata key")
     p_setmeta.add_argument("dir", help="Task directory")
@@ -897,6 +905,7 @@ def main() -> int:
         "set-scope": cmd_set_scope,
         "set-worktree": clai_delta.cmd_set_worktree,
         "set-pr": clai_delta.cmd_set_pr,
+        "delivery-gate": clai_delta.cmd_delivery_gate,
         "set-meta": cmd_set_meta,
         "rename": cmd_rename,
         "archive": cmd_archive,
