@@ -169,7 +169,7 @@ channel:
 #              never the default branch, never a tag, and never a merge (that
 #              stays a human click; PR ≠ delivery).
 # The four always-stop rules in .trellis/domains/DISCIPLINE.md apply under
-# either mode, and an explicit verbal stop always wins over hands-off.
+# every tier, and an explicit verbal stop always wins over hands-off.
 #
 # autonomy: hands-off
 #
