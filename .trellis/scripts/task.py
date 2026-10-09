@@ -57,6 +57,7 @@ from common.io import (
 from common.task_utils import resolve_task_dir, run_task_hooks
 from common.tasks import iter_active_tasks, children_progress
 from common.frontier import cmd_frontier
+from common.verify import cmd_add_verify, cmd_clear_verify, cmd_run_verify
 
 # Import command handlers from split modules (also re-exports for plan.py compatibility)
 from common.task_store import (
@@ -581,9 +582,13 @@ Usage:
   python3 task.py set-meta <dir> <key> <value>       Set/overwrite a task metadata key
   python3 task.py rename <dir> <new-slug>            Rename task, identity fields and references
   python3 task.py archive <task-dir>                 Archive completed task
+  python3 task.py add-verify <dir> <cmd> [--expect-exit N] [--timeout SEC]  Record a verification command
+  python3 task.py run-verify <dir> [--json]          Run a task's verification contract
+  python3 task.py clear-verify <dir>                 Drop a task's verification contract
   python3 task.py add-subtask <parent> <child>       Link child task to parent
   python3 task.py remove-subtask <parent> <child>    Unlink child from parent
   python3 task.py list [--mine] [--status <status>] [--json]  List tasks
+  python3 task.py frontier [--board <slug>] [--json] List tasks whose blockers are all satisfied
   python3 task.py list-archive [YYYY-MM]             List archived tasks
 
 Monorepo options:
@@ -594,6 +599,9 @@ Rename options:
 
 Archive options:
   --no-commit                Skip the auto git commit after archiving
+  --skip-verify REASON       Archive without running the verification contract. The
+                             reason is required and lands in `verify_skipped`, so the
+                             worklog can cite it in place of a passing run.
   --skip-branch-validation   Archive despite missing or self-referential branch metadata.
                              Archive normally refuses a task with no `branch` when it has a
                              `base_branch` and the repo has a remote, or with
@@ -782,6 +790,11 @@ def main() -> int:
     p_archive.add_argument("name", help="Task directory or name")
     p_archive.add_argument("--no-commit", action="store_true", help="Skip auto git commit after archive")
     p_archive.add_argument(
+        "--skip-verify",
+        metavar="REASON",
+        help="Archive without running the verification contract; the reason is recorded in task.json",
+    )
+    p_archive.add_argument(
         "--skip-branch-validation",
         action="store_true",
         help=(
@@ -802,6 +815,27 @@ def main() -> int:
     )
     p_frontier.add_argument("--board", help="Filter to one domain board slug (meta.domain)")
     p_frontier.add_argument("--json", action="store_true", help="Output machine-readable JSON")
+
+    # add-verify
+    p_addverify = subparsers.add_parser("add-verify", help="Record a verification command")
+    p_addverify.add_argument("dir", help="Task directory")
+    p_addverify.add_argument("cmd", help="Command to run from the repo root")
+    p_addverify.add_argument("--expect-exit", type=int, default=0, help="Expected exit code")
+    p_addverify.add_argument(
+        "--timeout",
+        type=int,
+        default=600,
+        help="Seconds before the command counts as failed",
+    )
+
+    # clear-verify
+    p_clearverify = subparsers.add_parser("clear-verify", help="Drop a task's verification contract")
+    p_clearverify.add_argument("dir", help="Task directory")
+
+    # run-verify
+    p_runverify = subparsers.add_parser("run-verify", help="Run a task's verification contract")
+    p_runverify.add_argument("dir", help="Task directory")
+    p_runverify.add_argument("--json", action="store_true", help="Output machine-readable JSON")
 
     # add-subtask
     p_addsub = subparsers.add_parser("add-subtask", help="Link child task to parent")
@@ -841,6 +875,9 @@ def main() -> int:
         "remove-subtask": cmd_remove_subtask,
         "list": cmd_list,
         "frontier": cmd_frontier,
+        "add-verify": cmd_add_verify,
+        "clear-verify": cmd_clear_verify,
+        "run-verify": cmd_run_verify,
         "list-archive": cmd_list_archive,
     }
 

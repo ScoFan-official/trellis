@@ -26,6 +26,7 @@ from pathlib import Path
 
 from . import clai_delta
 from . import frontier
+from . import verify
 from .config import (
     get_codex_dispatch_mode,
     get_packages,
@@ -1363,6 +1364,16 @@ def cmd_archive(args: argparse.Namespace) -> int:
                 repo_root,
                 getattr(args, "skip_branch_validation", False),
             ):
+                print(
+                    f"Not archived: {_repo_relative_path(task_dir, repo_root)} is unchanged.",
+                    file=sys.stderr,
+                )
+                return 1
+
+            # Verification is the evidence the work is done; run it now instead
+            # of trusting anything recorded earlier — a stored "passed" flag goes
+            # stale the moment the base branch moves.
+            if not verify.archive_gate(data, task_dir, args, repo_root):
                 print(
                     f"Not archived: {_repo_relative_path(task_dir, repo_root)} is unchanged.",
                     file=sys.stderr,
