@@ -37,6 +37,8 @@ interface Script {
   /** `false` always fails; an array is consumed one worker call at a time. */
   workerOk?: boolean | boolean[];
   verifyVerified?: boolean;
+  /** How many commits the worker left ahead of base (default 1). */
+  commitsAhead?: number;
   /** Directories whose worktree already exists before the run starts. */
   existingWorktrees?: string[];
   /** Directories whose branch already archived them (a previous run). */
@@ -137,7 +139,7 @@ function harness(script: Script = {}): Harness {
         return ok();
       }
       if (verb === "rev-parse") return ok(`${OID}\n`);
-      if (verb === "rev-list") return ok("1\n");
+      if (verb === "rev-list") return ok(`${script.commitsAhead ?? 1}\n`);
       if (verb === "push") {
         h.pushed.push(args);
         return ok();
@@ -160,6 +162,7 @@ function harness(script: Script = {}): Harness {
       return null;
     },
     worktreePath: wtOf,
+    worktreeOccupied: (dir) => (script.existingWorktrees ?? []).includes(wtOf(dir)),
     ticketClosedOnBranch: (_branch, dir) => archivedDirs.has(dir),
     pathExists(target) {
       // Separator-agnostic: the runner builds these with path.join, which uses
@@ -421,8 +424,23 @@ describe("runLoop — the stop lines", () => {
     expect(result.stopped).toBe("no_grabbable_ticket");
     expect(result.attempted).toBe(0);
     expect(result.failed).toBe(0);
-    expect(h.ledger.some((l) => l.action === "stop" && /worktree still present/.test(l.reason ?? "")))
+    expect(h.ledger.some((l) => l.action === "stop" && /worktree still holds content/.test(l.reason ?? "")))
       .toBe(true);
+  });
+
+  it("fails the ticket when the worker reports done but commits nothing", async () => {
+    // A worker that says "done" without a commit is exactly the case that has no
+    // evidence left behind once its channel is pruned — so the report goes into
+    // the failure reason instead of being lost.
+    const h = harness({ ready: [{ dir: "01-01-alpha" }], commitsAhead: 0 });
+    const result = await runLoop({ ...baseOptions(), failThreshold: 1 }, h.ports);
+
+    expect(result.stopped).toBe("fail_threshold");
+    expect(result.archived).toBe(0);
+    expect(h.taskCalls.some((c) => c.args[0] === "archive")).toBe(false);
+    expect(h.ledger.find((l) => l.action === "blocked")?.reason).toMatch(
+      /no_commit\(worker reported: implemented and committed/,
+    );
   });
 
   it("refuses to invent a ref for a ticket without branch metadata", async () => {

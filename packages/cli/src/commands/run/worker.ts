@@ -30,6 +30,12 @@ export interface WorkerRequest {
   prompt: string;
   provider?: Provider;
   agent?: string;
+  /**
+   * Worker name inside the channel. `channelSpawn` requires one, and without an
+   * agent definition there is nothing to fall back to, so the runner names its
+   * own implementer.
+   */
+  workerName?: string;
   model?: string;
   timeoutMs: number;
   /** Context files handed to the worker (ticket docs + spec indexes). */
@@ -124,6 +130,7 @@ export async function oneShotWorker(
     const spawned = await channelSpawn(name, {
       agent: req.agent,
       provider: req.provider,
+      as: req.workerName ?? `implementer-${req.ticket}`,
       cwd: req.cwd,
       model: req.model,
       timeoutMs: req.timeoutMs,

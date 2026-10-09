@@ -78,6 +78,12 @@ export interface RunnerPorts {
    * signal for a ticket the frontier still lists.
    */
   ticketClosedOnBranch(branch: string, dir: string): boolean;
+  /**
+   * Whether the ticket's worktree directory still holds content — a previous
+   * attempt that died mid-flight. An empty directory is not a leftover (git
+   * happily reuses it); a non-empty one is evidence a human has to judge.
+   */
+  worktreeOccupied(dir: string): boolean;
   worktreePath(dir: string): string;
   pathExists(target: string): boolean;
   ticketDocs(dir: string): string[];
@@ -233,8 +239,8 @@ async function processOne(
   }
 
   const worktree = ports.worktreePath(dir);
-  if (ports.pathExists(worktree)) {
-    return { kind: "failed", reason: `worktree_exists(${worktree})` };
+  if (ports.worktreeOccupied(dir)) {
+    return { kind: "failed", reason: `worktree_occupied(${worktree})` };
   }
 
   const hasBranch = ports.git(["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`]);
@@ -307,8 +313,12 @@ async function runAttempt(
   const head = ports.git(["rev-parse", "HEAD"], worktree);
   const ahead = ports.git(["rev-list", "--count", `${base}..HEAD`], worktree);
   const commits = Number.parseInt((ahead.stdout || "").trim(), 10);
+  // The worker's closing line goes into the ledger because the channel that
+  // carried it is removed on success — without this, a worker that reports
+  // "done" while committing nothing leaves no trace of what it thought it did.
+  const report = firstLine(outcome.text);
   if (head.status !== 0 || !Number.isFinite(commits) || commits === 0) {
-    return { kind: "failed", reason: "no_commit(nothing to review or revert)" };
+    return { kind: "failed", reason: `no_commit(worker reported: ${report || "nothing"})` };
   }
   const oid = head.stdout.trim();
   ports.ledgerAppend({
@@ -316,7 +326,7 @@ async function runAttempt(
     action: "worker",
     worker: outcome.worker,
     commit: oid,
-    detail: `${commits} commit(s) ahead of ${base}`,
+    detail: `${commits} commit(s) ahead of ${base}; report: ${report || "-"}`,
   });
 
   const verify = ports.task(["run-verify", dir, "--json"], worktree);
@@ -476,8 +486,8 @@ export async function runLoop(opts: RunOptions, ports: RunnerPorts): Promise<Run
         skipped.push(`${entry.dir}: already archived on ${branch}`);
         continue;
       }
-      if (ports.pathExists(ports.worktreePath(entry.dir))) {
-        skipped.push(`${entry.dir}: worktree still present`);
+      if (ports.worktreeOccupied(entry.dir)) {
+        skipped.push(`${entry.dir}: worktree still holds content`);
         continue;
       }
       candidates.push(entry);
@@ -605,6 +615,14 @@ export function realPorts(
         root,
       );
       return onBranch.status !== 0;
+    },
+    worktreeOccupied(dir) {
+      const target = path.join(root, ".trellis", ".runtime", "worktrees", dir);
+      try {
+        return fs.readdirSync(target).length > 0;
+      } catch {
+        return false;
+      }
     },
     pathExists(target) {
       return fs.existsSync(target);
