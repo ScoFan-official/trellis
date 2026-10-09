@@ -156,7 +156,7 @@ Phase 3: Finish  → verify, update spec, commit, and wrap up
 
 ### Request Triage
 
-Autonomy mode comes from `.trellis/config.yaml` `autonomy: gated | hands-off` (default `hands-off`): `[B档]` lines apply under `gated` (ask the user at each gate); `[C档]` lines apply under `hands-off` (auto-pass the same gates — the user can veto afterwards). The always-stop list in Guardrails applies to both modes.
+Autonomy mode comes from `.trellis/config.yaml` `autonomy: gated | hands-off | supervised-delivery` (default `hands-off`; an unrecognized value is `hands-off` and is never treated as the push tier): `[B档]` lines apply under `gated` (ask the user at each gate); `[C档]` lines apply under `hands-off` and also under `supervised-delivery` (auto-pass the same gates — the user can veto afterwards). `supervised-delivery` adds one thing and one only: `trellis run` may push the ticket branch when `task.py delivery-gate` allows it, and open a PR that is already ready for review. It never merges, and pushing the default branch or a tag is refused by the gate, not by etiquette. The always-stop list in Guardrails applies to every tier.
 
 - Simple conversation or small task:
   - `[B档]` ask only whether this turn should create a Trellis task. If the user says no, skip Trellis for this session.
@@ -317,7 +317,7 @@ When a user request matches one of these intents inside an active task, route fi
 - Task creation approval is not implementation approval; implementation waits for `task.py start` after artifact review (`[C档]` auto-passes the review gate — see Request Triage).
 - PRD-only is valid for lightweight tasks; complex tasks need `design.md` + `implement.md`.
 - Planning must be persisted to task artifacts; checks must run before reporting completion.
-- Always stop and ask the user in BOTH autonomy modes: destructive/irreversible operations; secrets, credentials, or real external side-effects (the routine finish-work `git push` to an existing remote excepted); an active (non-stale) construction flag conflict on a domain; unclear ownership — when you cannot name the domain.
+- Always stop and ask the user in EVERY autonomy tier: destructive/irreversible operations; secrets, credentials, or real external side-effects (the routine finish-work `git push` to an existing remote excepted); an active (non-stale) construction flag conflict on a domain; unclear ownership — when you cannot name the domain.
 - An explicit user instruction to stop automation always overrides the autonomy mode — the verbal emergency stop wins over `autonomy: hands-off`.
 
 ### Loading Step Detail
@@ -344,7 +344,7 @@ Classify and route in one step, then create the task directory (consent per auto
 - A domain matches → pass `--meta domain=<slug>` to `task.py create` and write `Domain: .trellis/domains/<slug>/` at the top of `prd.md`.
 - No domain fits → scaffold one first: copy `.trellis/domains/_scaffold/` to `.trellis/domains/<slug>/` and append a `<slug>/ — <≤100-char purpose>` line to `REGISTRY.md`; the skeleton and the REGISTRY line land in the SAME commit. Then create the task. Slug is lowercase letters/digits/hyphens and must not semantically overlap an existing domain.
 - Genuinely domain-less (docs/worklog-only change, same-day throwaway probe, Trellis infra/meta work) → leave `meta.domain` empty and write `Domain: none（<one-line reason>）` at the top of `prd.md`.
-- **Ownership unclear → stop and ask the user** — a safety net, not a per-task gate; both autonomy modes stop here.
+- **Ownership unclear → stop and ask the user** — a safety net, not a per-task gate; every autonomy tier stops here.
 
 The command sets status to `planning`, writes `task.json`, creates a default `prd.md`, and auto-targets the new task when session identity is available:
 
@@ -645,7 +645,7 @@ The AI drives a batched commit of this task's code changes so `/finish-work` can
 
 3. **Classify dirty files into two groups**:
    - **AI-edited this session** — files you wrote/edited via Edit/Write/Bash tool calls in this session. You know what changed and why.
-   - **Unrecognized** — dirty files you did NOT touch this session (could be the user's manual edits, leftover WIP from a previous session, or unrelated work). **Unrecognized files NEVER enter any commit — in both autonomy modes.** List them separately instead.
+   - **Unrecognized** — dirty files you did NOT touch this session (could be the user's manual edits, leftover WIP from a previous session, or unrelated work). **Unrecognized files NEVER enter any commit — in every autonomy tier.** List them separately instead.
 
 4. **Draft a commit plan**. Group AI-edited files into logical commits (1 commit per coherent change unit, not 1 commit per file). Each entry: `<commit message>` + file list. List unrecognized files separately at the bottom.
 
