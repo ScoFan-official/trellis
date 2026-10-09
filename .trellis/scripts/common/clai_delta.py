@@ -50,14 +50,14 @@ CLAI DELTA LIST (numbered for the contract document — when an upstream
             Scoping rule: fires only on positive routing intent — a task
             with neither meta.domain nor a `Domain:` line passes, so
             pre-domain-layer tickets are never retro-locked.
-    CLAI-9  task.py set-worktree <dir> <path>|-
-            Records the git worktree a ticket is being implemented in — the
-            `task.json` field the schema has always declared but nothing wrote.
-            The loop runner (`trellis run`) fills it per ticket and clears it
-            with `-` when the worktree is torn down, so a closed ticket never
-            keeps a dangling pointer. Path must exist as a directory: the
-            runner creates the worktree first, so a refusal means a typo or an
-            already-removed tree.
+    CLAI-9  task.py set-worktree <dir> <path>|- / task.py set-pr <dir> <url>
+            The two formal `task.json` fields the loop runner writes and no
+            other command owns: `worktree_path` (declared by the schema, never
+            written — a ticket's worktree was undiscoverable outside the session
+            that made it; `-` clears it once the worktree is torn down) and
+            `pr_url` (the review pointer `gh pr create` prints). Path must exist
+            as a directory, URL must be http(s) — a refusal means a typo, not a
+            state the runner can legitimately be in.
             (CLAI-8 is reserved for the `supervised-delivery` push whitelist
             landing in the next slice — the gap is deliberate because the
             contract text already cites that number.)
@@ -803,24 +803,35 @@ def frontend_design_problems(
 
 
 # =============================================================================
-# CLAI-9 — worktree pointer on the task record (run support for the loop runner)
+# CLAI-9 — run setters: worktree pointer + review pointer (run support)
 # =============================================================================
 
 # Sentinel clearing the pointer; a path argument is never a bare `-`.
 WORKTREE_CLEAR_ARG = "-"
 
+_PR_URL_RE = re.compile(r"^https?://\S+$", re.IGNORECASE)
 
-def cmd_set_worktree(args: argparse.Namespace) -> int:
-    """`task.py set-worktree <dir> <path>|-` — record the ticket's worktree."""
-    repo_root = get_repo_root()
-    target_dir = resolve_task_dir(args.dir, repo_root)
+
+def _read_for_write(task_json: Path) -> dict | None:
+    """Read a task.json a command is about to rewrite, reporting any failure.
+
+    A record we cannot read is not a record we may rewrite — overwriting here
+    would silently discard whatever the failure was. Message shape mirrors
+    task_store._report_read_failure (importing it would cycle back here).
+    """
+    data, reason = read_json_checked(task_json)
+    if data is not None:
+        return data
+    problem, hint = describe_json_read_failure(task_json, reason)
+    print(colored(f"Error: {problem}", Colors.RED), file=sys.stderr)
+    print(hint, file=sys.stderr)
+    return None
+
+
+def _write_task_field(args: argparse.Namespace, field: str, value: object) -> int:
+    """Shared body of the CLAI-9 setters: one field, one write, no reformat."""
+    target_dir = resolve_task_dir(args.dir, get_repo_root())
     if target_dir is None:
-        return 1
-
-    value = getattr(args, "path", "")
-    if not value:
-        print(colored("Error: Missing arguments", Colors.RED))
-        print("Usage: python3 task.py set-worktree <task-dir> <path>|-")
         return 1
 
     task_json = target_dir / FILE_TASK_JSON
@@ -828,33 +839,61 @@ def cmd_set_worktree(args: argparse.Namespace) -> int:
         print(colored(f"Error: task.json not found at {target_dir}", Colors.RED))
         return 1
 
-    data, reason = read_json_checked(task_json)
+    data = _read_for_write(task_json)
     if data is None:
-        # A record we cannot read is not a record we may rewrite — overwriting
-        # here would silently discard whatever the failure was. Mirrors
-        # task_store._report_read_failure (importing it would cycle back here).
-        problem, hint = describe_json_read_failure(task_json, reason)
-        print(colored(f"Error: {problem}", Colors.RED), file=sys.stderr)
-        print(hint, file=sys.stderr)
         return 1
 
+    data[field] = value
+    if not write_json(task_json, data):
+        print(colored(f"Error: failed to write {task_json}", Colors.RED))
+        return 1
+    return 0
+
+
+def cmd_set_worktree(args: argparse.Namespace) -> int:
+    """`task.py set-worktree <dir> <path>|-` — record the ticket's worktree."""
+    value = getattr(args, "path", "")
+    if not value:
+        print(colored("Error: Missing arguments", Colors.RED))
+        print("Usage: python3 task.py set-worktree <task-dir> <path>|-")
+        return 1
+
+    repo_root = get_repo_root()
     if value == WORKTREE_CLEAR_ARG:
         resolved: str | None = None
     else:
         candidate = Path(value)
         if not candidate.is_absolute():
             candidate = repo_root / candidate
+        # The runner creates the worktree before recording it, so a refusal can
+        # only mean a typo or a tree already torn down.
         if not candidate.is_dir():
             print(colored(f"Error: not a directory: {value}", Colors.RED))
             print("Create the worktree first (`git worktree add`), or pass `-` to clear.")
             return 1
         resolved = str(candidate)
 
-    data["worktree_path"] = resolved
-    if not write_json(task_json, data):
-        print(colored(f"Error: failed to write {task_json}", Colors.RED))
+    if _write_task_field(args, "worktree_path", resolved) != 0:
         return 1
-
     state = "cleared" if resolved is None else f"→ {resolved}"
     print(colored(f"✓ worktree_path {state}", Colors.GREEN))
+    return 0
+
+
+def cmd_set_pr(args: argparse.Namespace) -> int:
+    """`task.py set-pr <dir> <url>` — record the review pointer for the ticket."""
+    value = getattr(args, "url", "")
+    if not value:
+        print(colored("Error: Missing arguments", Colors.RED))
+        print("Usage: python3 task.py set-pr <task-dir> <pr-url>")
+        return 1
+
+    if not _PR_URL_RE.fullmatch(value.strip()):
+        print(colored(f"Error: not a url: {value}", Colors.RED))
+        print("Expected an http(s) review URL, e.g. the value `gh pr create` prints.")
+        return 1
+
+    if _write_task_field(args, "pr_url", value.strip()) != 0:
+        return 1
+    print(colored(f"✓ pr_url → {value.strip()}", Colors.GREEN))
     return 0

@@ -1,10 +1,12 @@
 /**
- * Integration tests for CLAI-9 `task.py set-worktree` (run support for D5):
+ * Integration tests for the CLAI-9 run setters — the two formal task.json
+ * fields the D5 loop runner writes:
  *
- *   The loop runner creates one git worktree per ticket and records it in the
- *   `worktree_path` field the task schema already declared but nothing wrote.
- *   `-` clears the pointer when the worktree is removed, so a finished ticket
- *   never keeps a dangling path.
+ *   `worktree_path` and `pr_url` have always been declared by the schema and
+ *   seeded null, but nothing wrote them, so a ticket's worktree and its review
+ *   pointer were undiscoverable outside the session that made them.
+ *   `set-worktree` takes a directory that exists (`-` clears it once the
+ *   worktree is removed); `set-pr` takes an http(s) URL.
  *
  * Real templates are stamped into a throwaway repo and driven through the
  * actual CLI — no internal mocks.
@@ -168,5 +170,50 @@ describe.skipIf(PYTHON === null)("task.py set-worktree", () => {
     const r = runTask(repo, "set-worktree", "a-one", worktree);
     expect(r.status).toBe(0);
     expect(readField(repo, dir, "worktree_path")).toBe(worktree);
+  });
+});
+
+describe.skipIf(PYTHON === null)("task.py set-pr", () => {
+  const PR_URL = "https://github.com/acme/repo/pull/42";
+
+  it("records an https URL in the formal pr_url field", () => {
+    const dir = createTask(repo, "b-two");
+    const r = runTask(repo, "set-pr", dir, PR_URL);
+    expect(r.status).toBe(0);
+    expect(readField(repo, dir, "pr_url")).toBe(PR_URL);
+  });
+
+  it("accepts http too", () => {
+    const dir = createTask(repo, "b-two");
+    expect(
+      runTask(repo, "set-pr", dir, "http://gitea.local/acme/repo/pulls/7").status,
+    ).toBe(0);
+    expect(readField(repo, dir, "pr_url")).toBe("http://gitea.local/acme/repo/pulls/7");
+  });
+
+  it("refuses a value that is not a URL and leaves the field null", () => {
+    const dir = createTask(repo, "b-two");
+    const r = runTask(repo, "set-pr", dir, "see slack for the link");
+    expect(r.status).not.toBe(0);
+    expect(r.stdout + r.stderr).toMatch(/not a url/i);
+    expect(readField(repo, dir, "pr_url")).toBeNull();
+  });
+
+  it("leaves a malformed task.json untouched and exits non-zero", () => {
+    const dir = createTask(repo, "b-two");
+    fs.writeFileSync(taskJsonPath(repo, dir), "{ not json", "utf-8");
+
+    const r = runTask(repo, "set-pr", dir, PR_URL);
+    expect(r.status).not.toBe(0);
+    expect(fs.readFileSync(taskJsonPath(repo, dir), "utf-8")).toBe("{ not json");
+  });
+
+  it("does not disturb the worktree pointer it is not writing", () => {
+    const dir = createTask(repo, "b-two");
+    expect(runTask(repo, "set-worktree", dir, worktree).status).toBe(0);
+    expect(runTask(repo, "set-pr", dir, PR_URL).status).toBe(0);
+
+    expect(readField(repo, dir, "worktree_path")).toBe(worktree);
+    expect(readField(repo, dir, "pr_url")).toBe(PR_URL);
   });
 });
