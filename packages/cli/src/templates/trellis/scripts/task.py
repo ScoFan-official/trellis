@@ -590,6 +590,7 @@ Usage:
   python3 task.py set-branch <dir> <branch>          Set git branch
   python3 task.py set-base-branch <dir> <branch>     Set PR target branch
   python3 task.py set-scope <dir> <scope>            Set scope for PR title
+  python3 task.py set-worktree <dir> <path>|-        Record (or clear) the ticket's git worktree
   python3 task.py set-meta <dir> <key> <value>       Set/overwrite a task metadata key
   python3 task.py rename <dir> <new-slug>            Rename task, identity fields and references
   python3 task.py archive <task-dir>                 Archive completed task
@@ -780,6 +781,13 @@ def main() -> int:
     p_scope.add_argument("dir", help="Task directory")
     p_scope.add_argument("scope", help="Scope name")
 
+    # set-worktree (CLAI-9 — run support: the loop runner's worktree pointer)
+    p_worktree = subparsers.add_parser(
+        "set-worktree", help="Record the git worktree a ticket is implemented in"
+    )
+    p_worktree.add_argument("dir", help="Task directory")
+    p_worktree.add_argument("path", help="Worktree directory, or - to clear")
+
     # set-meta
     p_setmeta = subparsers.add_parser("set-meta", help="Set/overwrite a task metadata key")
     p_setmeta.add_argument("dir", help="Task directory")
@@ -879,6 +887,7 @@ def main() -> int:
         "set-branch": cmd_set_branch,
         "set-base-branch": cmd_set_base_branch,
         "set-scope": cmd_set_scope,
+        "set-worktree": clai_delta.cmd_set_worktree,
         "set-meta": cmd_set_meta,
         "rename": cmd_rename,
         "archive": cmd_archive,

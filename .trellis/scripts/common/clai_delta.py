@@ -50,6 +50,17 @@ CLAI DELTA LIST (numbered for the contract document — when an upstream
             Scoping rule: fires only on positive routing intent — a task
             with neither meta.domain nor a `Domain:` line passes, so
             pre-domain-layer tickets are never retro-locked.
+    CLAI-9  task.py set-worktree <dir> <path>|-
+            Records the git worktree a ticket is being implemented in — the
+            `task.json` field the schema has always declared but nothing wrote.
+            The loop runner (`trellis run`) fills it per ticket and clears it
+            with `-` when the worktree is torn down, so a closed ticket never
+            keeps a dangling pointer. Path must exist as a directory: the
+            runner creates the worktree first, so a refusal means a typo or an
+            already-removed tree.
+            (CLAI-8 is reserved for the `supervised-delivery` push whitelist
+            landing in the next slice — the gap is deliberate because the
+            contract text already cites that number.)
 
 Writer identity (own-writer matching): `TRELLIS_WRITER` env var wins;
 otherwise `devin-<hostname>` — the convention used by Devin agents in
@@ -61,6 +72,7 @@ neutral alias like `devin` — the protocol only needs uniqueness.
 
 from __future__ import annotations
 
+import argparse
 import os
 import re
 import socket
@@ -70,9 +82,10 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from . import git
-from .io import read_json_checked, write_json
+from .io import describe_json_read_failure, read_json_checked, write_json
 from .log import Colors, colored
-from .paths import DIR_WORKFLOW
+from .paths import DIR_WORKFLOW, FILE_TASK_JSON, get_repo_root
+from .task_utils import resolve_task_dir
 from .trellis_config import read_trellis_config
 
 
@@ -787,3 +800,61 @@ def frontend_design_problems(
         "findings, and each disposition (fixed / deferred / rejected); an "
         "empty \"no findings\" entry is valid only if the commands ran."
     ]
+
+
+# =============================================================================
+# CLAI-9 — worktree pointer on the task record (run support for the loop runner)
+# =============================================================================
+
+# Sentinel clearing the pointer; a path argument is never a bare `-`.
+WORKTREE_CLEAR_ARG = "-"
+
+
+def cmd_set_worktree(args: argparse.Namespace) -> int:
+    """`task.py set-worktree <dir> <path>|-` — record the ticket's worktree."""
+    repo_root = get_repo_root()
+    target_dir = resolve_task_dir(args.dir, repo_root)
+    if target_dir is None:
+        return 1
+
+    value = getattr(args, "path", "")
+    if not value:
+        print(colored("Error: Missing arguments", Colors.RED))
+        print("Usage: python3 task.py set-worktree <task-dir> <path>|-")
+        return 1
+
+    task_json = target_dir / FILE_TASK_JSON
+    if not task_json.is_file():
+        print(colored(f"Error: task.json not found at {target_dir}", Colors.RED))
+        return 1
+
+    data, reason = read_json_checked(task_json)
+    if data is None:
+        # A record we cannot read is not a record we may rewrite — overwriting
+        # here would silently discard whatever the failure was. Mirrors
+        # task_store._report_read_failure (importing it would cycle back here).
+        problem, hint = describe_json_read_failure(task_json, reason)
+        print(colored(f"Error: {problem}", Colors.RED), file=sys.stderr)
+        print(hint, file=sys.stderr)
+        return 1
+
+    if value == WORKTREE_CLEAR_ARG:
+        resolved: str | None = None
+    else:
+        candidate = Path(value)
+        if not candidate.is_absolute():
+            candidate = repo_root / candidate
+        if not candidate.is_dir():
+            print(colored(f"Error: not a directory: {value}", Colors.RED))
+            print("Create the worktree first (`git worktree add`), or pass `-` to clear.")
+            return 1
+        resolved = str(candidate)
+
+    data["worktree_path"] = resolved
+    if not write_json(task_json, data):
+        print(colored(f"Error: failed to write {task_json}", Colors.RED))
+        return 1
+
+    state = "cleared" if resolved is None else f"→ {resolved}"
+    print(colored(f"✓ worktree_path {state}", Colors.GREEN))
+    return 0
