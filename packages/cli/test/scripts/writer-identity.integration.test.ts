@@ -79,7 +79,18 @@ function createTask(repo: string, slug: string, domain?: string): string {
   return dir;
 }
 
-function seedBoard(repo: string, slug: string, flagWriter: string | null): string {
+/**
+ * Flag ages are parsed against local wall-clock time, so build the stamp from
+ * local parts and always relative to now: an absolute date here turns this
+ * suite red 24h later, when the planted flag crosses STALE_FLAG_AGE.
+ */
+function flagStamp(minutesAgo = 0): string {
+  const d = new Date(Date.now() - minutesAgo * 60_000);
+  const pad = (n: number): string => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function seedBoard(repo: string, slug: string, flagWriter: string | null, minutesAgo = 0): string {
   const board = path.join(repo, ".trellis", "domains", slug);
   fs.mkdirSync(path.join(board, "worklog"), { recursive: true });
   const registry = path.join(repo, ".trellis", "domains", "REGISTRY.md");
@@ -90,7 +101,7 @@ function seedBoard(repo: string, slug: string, flagWriter: string | null): strin
     "utf-8",
   );
   const flag = flagWriter
-    ? `旗: ${flagWriter} · 10-09-probe · 自 2026-10-09 10:00\n`
+    ? `旗: ${flagWriter} · 10-09-probe · 自 ${flagStamp(minutesAgo)}\n`
     : "";
   fs.writeFileSync(path.join(board, "README.md"), `${flag}# ${slug}\n`, "utf-8");
   return board;
@@ -160,6 +171,21 @@ describe.skipIf(PYTHON === null)("flag ownership under the real platform", () =>
       TRELLIS_CONTEXT_ID: "writer-id-own",
     });
     expect(r.status).toBe(0);
+  });
+
+  it("proceeds once a foreign flag has gone stale, and says so on stderr", () => {
+    // 腐旗 (>24h) deliberately does not lock a board forever — but it must stay
+    // visible, because "stale" is also what a crashed session leaves behind.
+    seedBoard(repo, "probe", `devin-${HOSTNAME}`, 25 * 60);
+    const dir = createTask(repo, "d-four", "probe");
+
+    const r = runTask(repo, ["start", dir, "--allow-empty-context"], {
+      TRELLIS_WRITER: "",
+      TRELLIS_PLATFORM: "qoder",
+      TRELLIS_CONTEXT_ID: "writer-id-stale",
+    });
+    expect(r.status).toBe(0);
+    expect(r.stderr).toMatch(/旗已腐/);
   });
 
   it("still honors an explicit identity that carries a writer suffix", () => {
