@@ -34,6 +34,7 @@ import { spawnSync } from "node:child_process";
 import { loadTaskRecord } from "@mindfoldhq/trellis-core/task";
 
 import { listProviders, type Provider } from "./channel/adapters/index.js";
+import { resolveWorkerGuardConfig } from "./channel/guard.js";
 import { parseDuration } from "./channel/wait.js";
 import { resolveSupportedPython } from "./init.js";
 import { openLedger, type LedgerInput } from "./run/ledger.js";
@@ -760,6 +761,13 @@ export function realPorts(
 ): RunnerPorts {
   const python = resolveSupportedPython().command;
   const taskPy = path.join(root, ".trellis", "scripts", "task.py");
+  // R5: the worker inherits the channel supervisor's guard policy, so a wedged
+  // worker is given up on after `channel.worker_guard.idle_timeout` rather than
+  // burning the whole wall clock, and the precedence (flag > env > config >
+  // default) is the one place `channel run` already implements.
+  // `maxLiveWorkers` is deliberately not consulted: the loop works one ticket at
+  // a time, so at most one worker is ever live.
+  const guard = resolveWorkerGuardConfig({ cwd: root });
 
   return {
     task(args, cwd) {
@@ -843,7 +851,12 @@ export function realPorts(
         .map((name) => path.join(taskDir, name))
         .filter((p) => fs.existsSync(p));
     },
-    worker: oneShotWorker,
+    worker(req) {
+      return oneShotWorker({
+        ...req,
+        idleTimeoutMs: req.idleTimeoutMs ?? guard.idleTimeoutMs,
+      });
+    },
     ledgerAppend,
     log,
   };
