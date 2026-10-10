@@ -27,6 +27,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from . import clai_delta
+from .config import coerce_config_bool
 from .log import Colors, colored
 from .paths import FILE_TASK_JSON, get_repo_root
 from .io import describe_json_read_failure, read_json_checked, write_json
@@ -269,11 +270,23 @@ def cmd_run_verify(args: argparse.Namespace) -> int:
 
 
 def verify_required(repo_root: Path) -> bool:
-    """Whether a missing contract blocks archive (config `verify_required:`)."""
-    value = clai_delta.read_trellis_config(repo_root).get("verify_required")
-    if isinstance(value, bool):
-        return value
-    return isinstance(value, str) and value.strip().lower() in ("true", "yes", "1")
+    """Whether a missing contract blocks archive (config `verify_required:`).
+
+    One helper for the boolean, as every other config key does: `yes` / `on` /
+    `1` have to mean the same thing here as they do anywhere else in the file,
+    and an unrecognized value falls back to the default with a warning instead
+    of silently selecting the other branch.
+
+    The default is per tier, which D3 promised when the third tier landed: a
+    repo that lets an unattended run push must not archive on prose, so
+    `supervised-delivery` blocks by default and the other two stay as loud
+    warnings until the operator opts in.
+    """
+    config = clai_delta.read_trellis_config(repo_root)
+    default = clai_delta.read_autonomy(repo_root) == clai_delta.TIER_SUPERVISED
+    if "verify_required" not in config:
+        return default
+    return coerce_config_bool(config["verify_required"], default, "verify_required")
 
 
 def archive_gate(task_data: dict, task_dir: Path, args: argparse.Namespace, repo_root: Path) -> bool:

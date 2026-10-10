@@ -242,9 +242,11 @@ describe("archive gate", () => {
   });
 
   it("refuses a task with no contract once the repo opts in", () => {
+    // The inline-comment form is the one that silently breaks a config reader,
+    // so the accessor's fixture has to cover it.
     fs.writeFileSync(
       path.join(repo, ".trellis", "config.yaml"),
-      "verify_required: true\n",
+      "verify_required: true   # archive needs a contract\n",
       "utf-8",
     );
     const dir = createTask("g-four");
@@ -252,6 +254,29 @@ describe("archive gate", () => {
     expect(r.status).toBe(1);
     expect(r.stderr).toContain("verify_required");
     expect(isActive(dir)).toBe(true);
+  });
+
+  it("refuses by default under supervised-delivery, and `no` still opts out", () => {
+    // The third tier promised this: an unattended run must not archive on
+    // prose. The key overrides in both directions.
+    fs.writeFileSync(
+      path.join(repo, ".trellis", "config.yaml"),
+      "autonomy: supervised-delivery\n",
+      "utf-8",
+    );
+    const dir = createTask("g-four-b");
+    const refused = runTask("archive", dir, "--no-commit");
+    expect(refused.status).toBe(1);
+    expect(isActive(dir)).toBe(true);
+
+    fs.writeFileSync(
+      path.join(repo, ".trellis", "config.yaml"),
+      "autonomy: supervised-delivery\nverify_required: no\n",
+      "utf-8",
+    );
+    const warned = runTask("archive", dir, "--no-commit");
+    expect(warned.status).toBe(0);
+    expect(warned.stdout + warned.stderr).toContain("archiving without evidence");
   });
 
   it("accepts --skip-verify with a reason and records it", () => {

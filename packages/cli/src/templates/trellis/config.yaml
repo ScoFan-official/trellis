@@ -181,3 +181,17 @@ channel:
 # `*` does not cross `/`. Ask with `task.py delivery-gate <ref> --json`, which
 # reports the git facts it used (default branch, tag, remote); a protected
 # position is refused even when a whitelist glob would match it.
+#
+# Evidence requirement at `task.py archive`.
+#   true  → a task with no `verify` contract is refused (no command to re-run).
+#   false → a missing contract is a warning; existing repos keep archiving.
+# Either way, a contract that exists and FAILS blocks the archive — that is
+# observed evidence, not a formality. Bypassing needs `--skip-verify "<reason>"`
+# and the reason is recorded in task.json for the worklog to cite.
+#
+# Default: true under supervised-delivery (an unattended run must not archive on
+# prose), false under gated / hands-off.
+#
+# Accepts: true / false / yes / no / 1 / 0 / on / off (case-insensitive).
+#
+# verify_required: false
