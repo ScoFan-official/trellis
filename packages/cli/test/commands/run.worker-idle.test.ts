@@ -20,7 +20,7 @@ function event(kind: string, extra: Record<string, unknown> = {}): ChannelEvent 
  * Emits `steps` with the given gaps between them, then goes silent forever.
  * Every await is abort-aware so a stopped clock ends the iteration.
  */
-function source(steps: Array<{ delayMs: number; ev?: ChannelEvent }>) {
+function source(steps: { delayMs: number; ev?: ChannelEvent }[]) {
   return async function* (signal: AbortSignal): AsyncGenerator<ChannelEvent> {
     for (const step of steps) {
       await sleep(step.delayMs, signal);
