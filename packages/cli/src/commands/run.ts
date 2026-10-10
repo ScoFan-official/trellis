@@ -537,7 +537,28 @@ async function runAttempt(
   if (archived.status !== 0) {
     return { kind: "failed", reason: `archive_refused(${firstLine(archived.stderr || archived.stdout)})` };
   }
-  ports.ledgerAppend({ ticket: dir, action: "archived", commit: oid });
+
+  // The archive commit is what carries `pr_url` and moves the task dir, so the
+  // PR is only mergeable-to-closure once it is on the remote. Pushing before
+  // archiving leaves a PR that closes nothing — measured on the live GitHub run:
+  // the reviewed branch had the work commit with `status=planning`,
+  // `pr_url=null`, while the closure sat on an unpushed local branch.
+  if (ports.hasRemote()) {
+    const afterArchive = ports.git(["push", "origin", branch], worktree);
+    if (afterArchive.status !== 0) {
+      return {
+        kind: "failed",
+        reason: `post_archive_push_failed(${firstLine(afterArchive.stderr || afterArchive.stdout)}; the ticket is closed locally only)`,
+      };
+    }
+  }
+
+  ports.ledgerAppend({
+    ticket: dir,
+    action: "archived",
+    commit: oid,
+    detail: `branch tip ${ports.git(["rev-parse", "HEAD"], worktree).stdout.trim().slice(0, 8)}`,
+  });
   return { kind: "archived" };
 }
 

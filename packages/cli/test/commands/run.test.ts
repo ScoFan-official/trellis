@@ -48,6 +48,8 @@ interface Script {
   closedOnBranch?: string[];
   /** CLAI-8 answer for the ticket branch. Default: tier refuses any push. */
   gate?: { allow?: boolean; reason?: string; tier?: string };
+  /** Make the Nth `git push` (1-based) fail. */
+  pushFail?: number;
   /** What `gh pr create` prints. Default: a real-looking PR URL. */
   ghOutput?: string;
   ghExit?: number;
@@ -161,7 +163,9 @@ function harness(script: Script = {}): Harness {
       }
       if (verb === "push") {
         h.pushed.push(args);
-        return ok();
+        return script.pushFail === h.pushed.length
+          ? { status: 1, stdout: "", stderr: "remote: denied" }
+          : ok();
       }
       if (verb === "remote") return ok(script.remote ? "origin\thttps://example.invalid/o/r.git (fetch)\n" : "");
       return ok();
@@ -428,7 +432,10 @@ describe("runLoop — the stop lines", () => {
     const result = await runLoop(baseOptions(), h.ports);
 
     expect(result.archived).toBe(1);
-    expect(h.pushed).toEqual([["push", "-u", "origin", "feature/01-01-alpha"]]);
+    expect(h.pushed).toEqual([
+      ["push", "-u", "origin", "feature/01-01-alpha"],
+      ["push", "origin", "feature/01-01-alpha"],
+    ]);
     expect(h.ghCalls[0]?.slice(0, 2)).toEqual(["pr", "create"]);
     // 定版 rule: the runner's PR arrives ready for review, never draft — and
     // `--ready` is not a flag gh accepts (the live run proved it).
@@ -456,6 +463,25 @@ describe("runLoop — the stop lines", () => {
     expect(h.taskCalls.some((c) => c.args[0] === "set-pr")).toBe(false);
     expect(h.taskCalls.some((c) => c.args[0] === "archive")).toBe(false);
     expect(h.ledger.find((l) => l.action === "blocked")?.reason).toMatch(/pr_url_unreadable/);
+  });
+
+  it("treats a closure left unpushed as a failure, not an archived ticket", async () => {
+    // The archive commit carries pr_url and the task-dir move; if it cannot
+    // reach the remote the PR closes nothing, so the run must say so. This
+    // ordering bug is what the live GitHub run exposed.
+    const h = harness({
+      ready: [{ dir: "01-01-alpha" }],
+      remote: true,
+      gate: { allow: true, reason: "whitelist(feature/*)", tier: "supervised-delivery" },
+      pushFail: 2,
+    });
+    const result = await runLoop({ ...baseOptions(), failThreshold: 1 }, h.ports);
+
+    expect(result.stopped).toBe("fail_threshold");
+    expect(result.archived).toBe(0);
+    expect(h.pushed).toHaveLength(2);
+    expect(h.ledger.some((l) => l.action === "archived")).toBe(false);
+    expect(h.ledger.find((l) => l.action === "blocked")?.reason).toMatch(/post_archive_push_failed/);
   });
 
   it("leaves a ticket that already has a review pointer untouched", async () => {
