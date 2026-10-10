@@ -307,8 +307,12 @@ describe("trellis template constants", () => {
       "several independently verifiable deliverables",
     );
     expect(workflowMdTemplate).toContain(
-      "Parent/child structure is not a dependency system",
+      // R1: ordering between tasks became a first-class field, so the section
+      // no longer says parent/child "is not a dependency system" — it points at
+      // `blocked_by` and `task.py frontier` instead.
+      "Parent/child is containment, not ordering",
     );
+    expect(workflowMdTemplate).toContain("blocked_by");
     expect(workflowMdTemplate).toContain("--parent <parent-dir>");
     expect(workflowMdTemplate).toContain("task.py add-subtask <parent> <child>");
     expect(workflowMdTemplate).toContain(
@@ -322,8 +326,9 @@ describe("trellis template constants", () => {
     expect(step).toContain("Parent tasks own source requirements");
     expect(step).toContain("Child tasks own actual deliverables");
     expect(step).toContain(
-      "Parent/child structure is not a dependency system",
+      "Parent/child structure is containment, not dependency",
     );
+    expect(step).toContain("task.py frontier");
     expect(step).toContain("Do not start the parent unless");
   });
 

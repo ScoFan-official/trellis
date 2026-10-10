@@ -162,7 +162,36 @@ channel:
 #   gated      (B档) ask the user at each gate: task creation, start, commit,
 #              finish-work
 #   hands-off  (C档) auto-pass those gates — the user can veto afterwards
+#   supervised-delivery
+#              (C+档) those gates plus local commits, worktrees and ticket state
+#              transitions run automatically, and `trellis run` may push a ticket
+#              branch — but only a ref listed in `delivery.auto_push_refs`,
+#              never the default branch, never a tag, and never a merge (that
+#              stays a human click; PR ≠ delivery).
 # The four always-stop rules in .trellis/domains/DISCIPLINE.md apply under
-# either mode, and an explicit verbal stop always wins over hands-off.
+# every tier, and an explicit verbal stop always wins over hands-off.
 #
 # autonomy: hands-off
+#
+# Delivery detail, consulted only by supervised-delivery:
+#   delivery:
+#     auto_push_refs:          # absent/empty = no push at all (== hands-off)
+#       - "feature/*"
+#     protected_refs: []       # extra globs that are always refused
+# `*` does not cross `/`. Ask with `task.py delivery-gate <ref> --json`, which
+# reports the git facts it used (default branch, tag, remote); a protected
+# position is refused even when a whitelist glob would match it.
+#
+# Evidence requirement at `task.py archive`.
+#   true  → a task with no `verify` contract is refused (no command to re-run).
+#   false → a missing contract is a warning; existing repos keep archiving.
+# Either way, a contract that exists and FAILS blocks the archive — that is
+# observed evidence, not a formality. Bypassing needs `--skip-verify "<reason>"`
+# and the reason is recorded in task.json for the worklog to cite.
+#
+# Default: true under supervised-delivery (an unattended run must not archive on
+# prose), false under gated / hands-off.
+#
+# Accepts: true / false / yes / no / 1 / 0 / on / off (case-insensitive).
+#
+# verify_required: false

@@ -56,6 +56,8 @@ from common.io import (
 )
 from common.task_utils import resolve_task_dir, run_task_hooks
 from common.tasks import iter_active_tasks, children_progress
+from common.frontier import cmd_frontier
+from common.verify import cmd_add_verify, cmd_clear_verify, cmd_run_verify
 
 # Import command handlers from split modules (also re-exports for plan.py compatibility)
 from common.task_store import (
@@ -264,6 +266,17 @@ def cmd_start(args: argparse.Namespace) -> int:
             "  撞旗纪律：向用户报告谁/自何时/在哪个上下文施工并等指示，不代拔不绕旗。",
             file=sys.stderr,
         )
+        return 1
+
+    # CLAI-7: planning artifacts must be complete before work starts — a
+    # routed task needs its prd `Domain:` line, a verify_required repo needs
+    # the verification contract. Refusing now beats stalling at archive.
+    artifact_problems = clai_delta.start_artifact_problems(task_json_path, repo_root)
+    if artifact_problems:
+        print(colored("Error: start refused — planning artifacts incomplete:", Colors.RED))
+        for problem in artifact_problems:
+            print(f"  - {problem}")
+        print("  Fix the artifacts above, then retry start.")
         return 1
 
     if not resolve_context_key():
@@ -577,12 +590,19 @@ Usage:
   python3 task.py set-branch <dir> <branch>          Set git branch
   python3 task.py set-base-branch <dir> <branch>     Set PR target branch
   python3 task.py set-scope <dir> <scope>            Set scope for PR title
+  python3 task.py set-worktree <dir> <path>|-        Record (or clear) the ticket's git worktree
+  python3 task.py set-pr <dir> <url>                 Record the review PR for the ticket
+  python3 task.py delivery-gate <ref> [--json]        Decide whether this repo may push <ref> (CLAI-8)
   python3 task.py set-meta <dir> <key> <value>       Set/overwrite a task metadata key
   python3 task.py rename <dir> <new-slug>            Rename task, identity fields and references
   python3 task.py archive <task-dir>                 Archive completed task
+  python3 task.py add-verify <dir> <cmd> [--expect-exit N] [--timeout SEC]  Record a verification command
+  python3 task.py run-verify <dir> [--json]          Run a task's verification contract
+  python3 task.py clear-verify <dir>                 Drop a task's verification contract
   python3 task.py add-subtask <parent> <child>       Link child task to parent
   python3 task.py remove-subtask <parent> <child>    Unlink child from parent
   python3 task.py list [--mine] [--status <status>] [--json]  List tasks
+  python3 task.py frontier [--board <slug>] [--json] List tasks whose blockers are all satisfied
   python3 task.py list-archive [YYYY-MM]             List archived tasks
 
 Monorepo options:
@@ -593,6 +613,9 @@ Rename options:
 
 Archive options:
   --no-commit                Skip the auto git commit after archiving
+  --skip-verify REASON       Archive without running the verification contract. The
+                             reason is required and lands in `verify_skipped`, so the
+                             worklog can cite it in place of a passing run.
   --skip-branch-validation   Archive despite missing or self-referential branch metadata.
                              Archive normally refuses a task with no `branch` when it has a
                              `base_branch` and the repo has a remote, or with
@@ -760,6 +783,27 @@ def main() -> int:
     p_scope.add_argument("dir", help="Task directory")
     p_scope.add_argument("scope", help="Scope name")
 
+    # set-worktree (CLAI-9 — run support: the loop runner's worktree pointer)
+    p_worktree = subparsers.add_parser(
+        "set-worktree", help="Record the git worktree a ticket is implemented in"
+    )
+    p_worktree.add_argument("dir", help="Task directory")
+    p_worktree.add_argument("path", help="Worktree directory, or - to clear")
+
+    # set-pr (CLAI-9 — run support: the review pointer trellis run writes back)
+    p_pr = subparsers.add_parser(
+        "set-pr", help="Record the review PR for a ticket"
+    )
+    p_pr.add_argument("dir", help="Task directory")
+    p_pr.add_argument("url", help="PR URL (http/https)")
+
+    # delivery-gate (CLAI-8 — the push answer for `trellis run`)
+    p_gate = subparsers.add_parser(
+        "delivery-gate", help="May this repo push the given ref?"
+    )
+    p_gate.add_argument("ref", help="Ref name to decide on, e.g. a ticket branch")
+    p_gate.add_argument("--json", action="store_true", help="Output machine-readable JSON")
+
     # set-meta
     p_setmeta = subparsers.add_parser("set-meta", help="Set/overwrite a task metadata key")
     p_setmeta.add_argument("dir", help="Task directory")
@@ -781,6 +825,11 @@ def main() -> int:
     p_archive.add_argument("name", help="Task directory or name")
     p_archive.add_argument("--no-commit", action="store_true", help="Skip auto git commit after archive")
     p_archive.add_argument(
+        "--skip-verify",
+        metavar="REASON",
+        help="Archive without running the verification contract; the reason is recorded in task.json",
+    )
+    p_archive.add_argument(
         "--skip-branch-validation",
         action="store_true",
         help=(
@@ -794,6 +843,34 @@ def main() -> int:
     p_list.add_argument("--mine", "-m", action="store_true", help="My tasks only")
     p_list.add_argument("--status", "-s", help="Filter by status")
     p_list.add_argument("--json", action="store_true", help="Output machine-readable JSON")
+
+    # frontier
+    p_frontier = subparsers.add_parser(
+        "frontier", help="List tasks whose blockers are all satisfied"
+    )
+    p_frontier.add_argument("--board", help="Filter to one domain board slug (meta.domain)")
+    p_frontier.add_argument("--json", action="store_true", help="Output machine-readable JSON")
+
+    # add-verify
+    p_addverify = subparsers.add_parser("add-verify", help="Record a verification command")
+    p_addverify.add_argument("dir", help="Task directory")
+    p_addverify.add_argument("cmd", help="Command to run from the repo root")
+    p_addverify.add_argument("--expect-exit", type=int, default=0, help="Expected exit code")
+    p_addverify.add_argument(
+        "--timeout",
+        type=int,
+        default=600,
+        help="Seconds before the command counts as failed",
+    )
+
+    # clear-verify
+    p_clearverify = subparsers.add_parser("clear-verify", help="Drop a task's verification contract")
+    p_clearverify.add_argument("dir", help="Task directory")
+
+    # run-verify
+    p_runverify = subparsers.add_parser("run-verify", help="Run a task's verification contract")
+    p_runverify.add_argument("dir", help="Task directory")
+    p_runverify.add_argument("--json", action="store_true", help="Output machine-readable JSON")
 
     # add-subtask
     p_addsub = subparsers.add_parser("add-subtask", help="Link child task to parent")
@@ -826,12 +903,19 @@ def main() -> int:
         "set-branch": cmd_set_branch,
         "set-base-branch": cmd_set_base_branch,
         "set-scope": cmd_set_scope,
+        "set-worktree": clai_delta.cmd_set_worktree,
+        "set-pr": clai_delta.cmd_set_pr,
+        "delivery-gate": clai_delta.cmd_delivery_gate,
         "set-meta": cmd_set_meta,
         "rename": cmd_rename,
         "archive": cmd_archive,
         "add-subtask": cmd_add_subtask,
         "remove-subtask": cmd_remove_subtask,
         "list": cmd_list,
+        "frontier": cmd_frontier,
+        "add-verify": cmd_add_verify,
+        "clear-verify": cmd_clear_verify,
+        "run-verify": cmd_run_verify,
         "list-archive": cmd_list_archive,
     }
 

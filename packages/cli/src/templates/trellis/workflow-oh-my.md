@@ -128,20 +128,22 @@ python3 ./.trellis/scripts/get_context.py --mode phase --step <X.Y>  # detailed 
                                     (status stays 'in_progress' from
                                     task.py start until task.py archive)
     [workflow-state:in_progress-inline] → Codex inline variant of Phase 2/3
-    [workflow-state:completed]    → currently DEAD: cmd_archive flips
-                                    status and moves the dir in the same
-                                    call, so the resolver loses the
-                                    pointer (block kept for a future
-                                    explicit in_progress→completed
-                                    transition)
+    Completion has no dedicated tag: cmd_archive clears the active-task
+    pointer in the same call that flips status, so the turn after
+    finish-work resolves to [workflow-state:no_task] — whose breadcrumb
+    carries a computed `next: <frontier head>` line (the first startable
+    ticket; full ready/blocked view via `task.py frontier`).
 
   Editing checklist:
     - When you change a [workflow-state:STATUS] block, also check the
       matching phase's `[required · once]` walkthrough steps for sync
     - Run `trellis update` after editing to push the new bodies to
-      downstream user projects (block-level managed replacement)
-    - Full runtime contract:
-      .trellis/spec/cli/backend/workflow-state-contract.md
+      downstream user projects (workflow.md is replaced as one managed
+      file when unmodified; a locally modified copy prompts instead)
+    - These blocks are parsed by inject-workflow-state.py (Python
+      platforms, installed under the platform hooks dir — e.g.
+      .claude/hooks/, .codex/hooks/) and inject-workflow-state.js
+      (OpenCode, .opencode/plugins/); the scripts hold no fallback bodies
 -->
 
 ## Phase Index
@@ -154,7 +156,7 @@ Phase 3: Finish  → verify, update spec, commit, and wrap up
 
 ### Request Triage
 
-Autonomy mode comes from `.trellis/config.yaml` `autonomy: gated | hands-off` (default `hands-off`): `[B档]` lines apply under `gated` (ask the user at each gate); `[C档]` lines apply under `hands-off` (auto-pass the same gates — the user can veto afterwards). The always-stop list in Guardrails applies to both modes.
+Autonomy mode comes from `.trellis/config.yaml` `autonomy: gated | hands-off | supervised-delivery` (default `hands-off`; an unrecognized value is `hands-off` and is never treated as the push tier): `[B档]` lines apply under `gated` (ask the user at each gate); `[C档]` lines apply under `hands-off` and also under `supervised-delivery` (auto-pass the same gates — the user can veto afterwards). `supervised-delivery` adds one thing and one only: `trellis run` may push the ticket branch when `task.py delivery-gate` allows it, and open a PR that is already ready for review. It never merges, and pushing the default branch or a tag is refused by the gate, not by etiquette. The always-stop list in Guardrails applies to every tier.
 
 - Simple conversation or small task:
   - `[B档]` ask only whether this turn should create a Trellis task. If the user says no, skip Trellis for this session.
@@ -177,7 +179,7 @@ Autonomy mode comes from `.trellis/config.yaml` `autonomy: gated | hands-off` (d
 
 Use a parent task when one user request contains several independently verifiable deliverables. The parent task owns the source requirement set, the task map, cross-child acceptance criteria, and final integration review; it normally should not be the implementation target unless it also has direct work.
 
-Use child tasks for deliverables that can be planned, implemented, checked, and archived independently. Parent/child structure is not a dependency system: if one child must wait for another, write that ordering in the child `prd.md` / `implement.md` and keep each child's acceptance criteria testable.
+Use child tasks for deliverables that can be planned, implemented, checked, and archived independently. Parent/child is containment, not ordering: when one child must wait for another, record it as a dependency with `task.py set-meta <child> blocked_by "<dir-or-slug> ..."`, and `task.py frontier` keeps that child out of the ready set until every blocker is done or archived. Sequencing that is not a hard blocker still belongs in the child `prd.md` / `implement.md`, and each child's acceptance criteria stays testable.
 
 Create new children with `task.py create "<title>" --slug <name> --parent <parent-dir>`. Link existing tasks with `task.py add-subtask <parent> <child>`, and unlink mistakes with `task.py remove-subtask <parent> <child>`.
 
@@ -187,6 +189,7 @@ Create new children with `task.py create "<title>" --slug <name> --parent <paren
 No active task. First classify the current turn; a new task is also routed to a domain in the same step — scan `.trellis/domains/REGISTRY.md` before `task.py create` (match → `meta.domain`; no match → scaffold the domain + REGISTRY line in the same commit; truly domain-less → `Domain: none（reason）` in prd.md). Ownership unclear → stop and ask the user — this applies in BOTH modes.
 [B档] Ask for task-creation consent before creating any Trellis task — simple/small: ask only whether this turn should create one; complex: ask to create a task and enter planning. If the user says no, skip Trellis or clarify/split scope.
 [C档] Create the task and route it without asking — the task itself is the record; the user can veto afterwards. The classification and routing judgments still apply.
+When a `next:` line appears below this block, it is the dependency frontier's head — the first startable ticket (blocked tickets excluded) — computed from task data by the hook, not editable here; run `task.py frontier` for the full ready/blocked view.
 [/workflow-state:no_task]
 
 <!-- Per-turn breadcrumb: shown when the active task record cannot be read. -->
@@ -276,19 +279,10 @@ Both modes: files you did not edit this session NEVER enter a commit — list th
 
 > Note: step 3.1 was folded into 2.2 (last-iteration full-scope check) and 3.4 (commit preamble). Numbering kept stable to avoid breaking external references.
 
-<!-- Per-turn breadcrumb: shown while status='completed'.
-     Currently DEAD in normal flow: cmd_archive writes status='completed' in
-     the same call that moves the task dir to archive/, so the active-task
-     resolver loses the pointer and the hook never fires on archived tasks.
-     Block preserved for a future status-transition redesign (e.g. an
-     explicit in_progress→completed command). Edit through the same spec
-     channel as the live blocks. -->
-
-[workflow-state:completed]
-Code committed. If dirty, return to Phase 3.4 first.
-[B档] Tell the user to run `/trellis:finish-work`.
-[C档] Run `/trellis:finish-work` yourself and report the archive + journal + push result.
-[/workflow-state:completed]
+<!-- Completion has no breadcrumb block: cmd_archive flips status and moves
+     the task dir in the same call, so the active-task pointer clears and the
+     turn after finish-work resolves to [workflow-state:no_task], whose body
+     carries the computed `next:` frontier pointer. -->
 
 ### Rules
 
@@ -331,7 +325,7 @@ When a user request matches one of these intents inside an active task, route fi
 - Task creation approval is not implementation approval; implementation waits for `task.py start` after artifact review (`[C档]` auto-passes the review gate — see Request Triage).
 - PRD-only is valid for lightweight tasks; complex tasks need `design.md` + `implement.md`.
 - Planning must be persisted to task artifacts; checks must run before reporting completion.
-- Always stop and ask the user in BOTH autonomy modes: destructive/irreversible operations; secrets, credentials, or real external side-effects (the routine finish-work `git push` to an existing remote excepted); an active (non-stale) construction flag conflict on a domain; unclear ownership — when you cannot name the domain.
+- Always stop and ask the user in EVERY autonomy tier: destructive/irreversible operations; secrets, credentials, or real external side-effects (the routine finish-work `git push` to an existing remote excepted); an active (non-stale) construction flag conflict on a domain; unclear ownership — when you cannot name the domain.
 - An explicit user instruction to stop automation always overrides the autonomy mode — the verbal emergency stop wins over `autonomy: hands-off`.
 
 ### Loading Step Detail
@@ -358,7 +352,7 @@ Classify and route in one step, then create the task directory (consent per auto
 - A domain matches → pass `--meta domain=<slug>` to `task.py create` and write `Domain: .trellis/domains/<slug>/` at the top of `prd.md`.
 - No domain fits → scaffold one first: copy `.trellis/domains/_scaffold/` to `.trellis/domains/<slug>/` and append a `<slug>/ — <≤100-char purpose>` line to `REGISTRY.md`; the skeleton and the REGISTRY line land in the SAME commit. Then create the task. Slug is lowercase letters/digits/hyphens and must not semantically overlap an existing domain.
 - Genuinely domain-less (docs/worklog-only change, same-day throwaway probe, Trellis infra/meta work) → leave `meta.domain` empty and write `Domain: none（<one-line reason>）` at the top of `prd.md`.
-- **Ownership unclear → stop and ask the user** — a safety net, not a per-task gate; both autonomy modes stop here.
+- **Ownership unclear → stop and ask the user** — a safety net, not a per-task gate; every autonomy tier stops here.
 
 The command sets status to `planning`, writes `task.json`, creates a default `prd.md`, and auto-targets the new task when session identity is available:
 
@@ -393,7 +387,7 @@ When considering a parent/child split:
 - Use a parent task when one request contains several independently verifiable deliverables.
 - Parent tasks own source requirements, child-task mapping, cross-child acceptance criteria, and final integration review.
 - Child tasks own actual deliverables that can be planned, implemented, checked, and archived independently.
-- Parent/child structure is not a dependency system. If child B depends on child A, write that ordering in child B's `prd.md` / `implement.md`.
+- Parent/child structure is containment, not dependency. Hard ordering is the formal `blocked_by` field (`task.py set-meta <task> blocked_by "<dir-or-slug> ..."`), which `task.py frontier` resolves into the ready set; write softer sequencing in the child's `prd.md` / `implement.md`.
 - Start the child task that owns the next deliverable. Do not start the parent unless the parent itself has direct implementation work.
 
 Return to this step whenever requirements change and revise the relevant artifact.
@@ -680,7 +674,7 @@ The AI drives a batched commit of this task's code changes so `/finish-work` can
 
 3. **Classify dirty files into two groups**:
    - **AI-edited this session** — files you wrote/edited via Edit/Write/Bash tool calls in this session. You know what changed and why.
-   - **Unrecognized** — dirty files you did NOT touch this session (could be the user's manual edits, leftover WIP from a previous session, or unrelated work). **Unrecognized files NEVER enter any commit — in both autonomy modes.** List them separately instead.
+   - **Unrecognized** — dirty files you did NOT touch this session (could be the user's manual edits, leftover WIP from a previous session, or unrelated work). **Unrecognized files NEVER enter any commit — in every autonomy tier.** List them separately instead.
 
 4. **Draft a commit plan**. Group AI-edited files into logical commits (1 commit per coherent change unit, not 1 commit per file). Each entry: `<commit message>` + file list. List unrecognized files separately at the bottom.
 
@@ -738,7 +732,7 @@ All tag blocks live in the `## Phase Index` section above, immediately after eac
 | Codex inline Phase 1 | `[workflow-state:planning-inline]` |
 | Phase 2 + Phase 3.2–3.4 (implementation + check + wrap-up) | `[workflow-state:in_progress]` (after Phase 2 summary) |
 | Codex inline Phase 2 + Phase 3.2–3.4 | `[workflow-state:in_progress-inline]` |
-| After Phase 3.5 (archived) | `[workflow-state:completed]` (after Phase 3 summary; **currently DEAD**) |
+| After Phase 3.5 (archived) | back to `[workflow-state:no_task]`; the Python hook appends a computed `next: <frontier head>` line — the re-entry pointer |
 
 ### Changing the per-turn prompt text
 
@@ -775,9 +769,9 @@ Add a `hooks` field to your `task.json`:
 
 Supported events: `after_create / after_start / after_finish / after_archive`. Note that `after_finish` ≠ a status change (it only clears the active-task pointer); use `after_archive` for "task is done" notifications.
 
-### Full contract
+### Where the state comes from
 
-For the workflow state machine's runtime contract, the locations of all status writers, pseudo-statuses (`no_task` / `stale_<source_type>`), the hook reachability matrix, and other deep details, see:
-
-- `.trellis/spec/cli/backend/workflow-state-contract.md` — runtime contract + writer table + test invariants
-- `.trellis/scripts/inject-workflow-state.py` — actual parser (reads workflow.md only, no embedded text)
+- Parsers — `inject-workflow-state.py` (Python platforms; installed as a hook, e.g. `.claude/hooks/`, `.codex/hooks/`) and `inject-workflow-state.js` (OpenCode, `.opencode/plugins/`). Both read this file only — no fallback bodies live in the scripts.
+- Writers — task status goes through `task.py` (`.trellis/scripts/common/task_store.py`); the active-task pointer lives under `.trellis/.runtime/` (`.trellis/scripts/common/active_task.py`).
+- Pseudo-statuses — `no_task`, `task_error`, and `stale_<source_type>` come from the active-task pointer, not from `task.json.status`.
+- Deeper customization — custom statuses, lifecycle hooks, writer details: bundled `trellis-meta` skill, `references/customize-local/`.

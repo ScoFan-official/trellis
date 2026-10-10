@@ -26,6 +26,8 @@ import json
 from pathlib import Path
 
 from . import clai_delta
+from . import frontier
+from . import verify
 from .config import get_context_injection_limits
 from .git import branch_exists_locally
 from .io import read_json
@@ -171,9 +173,13 @@ def cmd_validate(args: argparse.Namespace) -> int:
     # Warn (don't fail validation) when the recorded branch is stale — it
     # was likely already merged and deleted (#399 item 2).
     task_json_path = target_dir / FILE_TASK_JSON
+    legacy_blockers: str | None = None
+    verify_source: dict | None = None
     if task_json_path.is_file():
         task_data = read_json(task_json_path)
         stored_branch = task_data.get("branch") if task_data else None
+        legacy_blockers = frontier.meta_blocked_by(task_data) if task_data else None
+        verify_source = task_data if isinstance(task_data, dict) else None
         if stored_branch and not branch_exists_locally(stored_branch, repo_root):
             print(
                 colored(
@@ -184,7 +190,42 @@ def cmd_validate(args: argparse.Namespace) -> int:
             )
             print()
 
+    # Blockers moved from a free-form meta key to a formal field the frontier
+    # can resolve. Warn only — old tickets keep working until they are rewritten.
+    if legacy_blockers:
+        print(
+            colored(
+                "Warning: blockers stored in meta.blocked_by (legacy). Migrate with:",
+                Colors.YELLOW,
+            )
+        )
+        print(
+            f"  python3 task.py set-meta {target_dir} blocked_by \"<task-dir> ...\""
+        )
+        print()
+
     total_errors = 0
+
+    # A malformed `verify` entry would silently disable the archive gate, so it
+    # is a validation error rather than a note. An absent contract is only
+    # surfaced when the project opted in via `verify_required: true` —
+    # unconditional warnings would break the upstream contract that a clean
+    # manifest validates warning-free.
+    if verify_source is not None:
+        specs, shape_problems = verify.verify_specs(verify_source)
+        for problem in shape_problems:
+            print(colored(f"Error: {problem}", Colors.RED))
+            total_errors += 1
+        if not specs and not shape_problems and verify.verify_required(repo_root):
+            print(
+                colored(
+                    "Warning: no verification contract — `verify_required: true` is set "
+                    "in .trellis/config.yaml and `archive` will refuse this task.",
+                    Colors.YELLOW,
+                )
+            )
+            print()
+
     for jsonl_name in ["implement.jsonl", "check.jsonl"]:
         jsonl_file = target_dir / jsonl_name
         errors = _validate_jsonl(jsonl_file, repo_root, target_dir)

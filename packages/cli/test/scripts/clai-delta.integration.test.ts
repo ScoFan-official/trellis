@@ -179,6 +179,15 @@ function createTask(repo: string, slug: string, ...extra: string[]): string {
   return findTaskDir(repo, slug);
 }
 
+/** Rewrite prd.md with a single `Domain:` line atop the fixture body. */
+function writePrdDomain(repo: string, dirName: string, line: string): void {
+  fs.writeFileSync(
+    path.join(repo, ".trellis", "tasks", dirName, "prd.md"),
+    `# ${dirName}\n\n${line}\n\n## Goal\n\nfixture\n`,
+    "utf-8",
+  );
+}
+
 describe.skipIf(PYTHON === null)("clai-delta (domains layer CLI)", () => {
   let tmp: string;
 
@@ -246,6 +255,7 @@ describe.skipIf(PYTHON === null)("clai-delta (domains layer CLI)", () => {
       flag: flagLine(FOREIGN_WRITER, "old-task", STALE_TIMESTAMP),
     });
     const dir = createTask(tmp, "stale-flag-task", "--domain", "deap");
+    writePrdDomain(tmp, dir, "Domain: .trellis/domains/deap/");
 
     const r = runTask(tmp, "start", dir);
     expect(r.status).toBe(0);
@@ -257,6 +267,7 @@ describe.skipIf(PYTHON === null)("clai-delta (domains layer CLI)", () => {
       flag: flagLine(WRITER, "self-task", freshTimestamp()),
     });
     const dir = createTask(tmp, "own-flag-task", "--domain", "deap");
+    writePrdDomain(tmp, dir, "Domain: .trellis/domains/deap/");
 
     const r = runTask(tmp, "start", dir);
     expect(r.status).toBe(0);
@@ -266,6 +277,7 @@ describe.skipIf(PYTHON === null)("clai-delta (domains layer CLI)", () => {
     seedDomains(tmp);
     makeBoard(tmp, "deap");
     const dir = createTask(tmp, "no-flag-task", "--domain", "deap");
+    writePrdDomain(tmp, dir, "Domain: .trellis/domains/deap/");
 
     const r = runTask(tmp, "start", dir);
     expect(r.status).toBe(0);
@@ -344,6 +356,7 @@ describe.skipIf(PYTHON === null)("clai-delta (domains layer CLI)", () => {
     const flag = flagLine(WRITER, "self-task", freshTimestamp());
     makeBoard(tmp, "deap", { flag });
     const dir = createTask(tmp, "finish-flag-task", "--domain", "deap");
+    writePrdDomain(tmp, dir, "Domain: .trellis/domains/deap/");
     expect(runTask(tmp, "start", dir).status).toBe(0);
 
     const r = runTask(tmp, "finish");
@@ -417,5 +430,65 @@ describe.skipIf(PYTHON === null)("clai-delta (domains layer CLI)", () => {
     expect(r.stdout).toContain("当前模式");
     expect(r.stdout).toContain("gated");
     expect(r.stdout).not.toMatch(/当前模式[^\n]*hands-off/);
+  });
+
+  // ── D2: get_context 下一票 (NEXT UP) section ─────────────────────────
+
+  it("get_context prints the frontier head as 下一票 when a ticket is ready", () => {
+    seedDomains(tmp);
+    makeBoard(tmp, "deap");
+    const dir = createTask(tmp, "next-head", "--domain", "deap");
+
+    const r = runContext(tmp);
+
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain("下一票");
+    expect(r.stdout).toContain(`${dir}/ (planning)`);
+    // The counts line pins the frontier view the head was picked from.
+    expect(r.stdout).toMatch(/ready\s*1\s*·\s*blocked\s*0/);
+  });
+
+  it("get_context 下一票 names the blocked state when nothing is ready", () => {
+    seedDomains(tmp);
+    makeBoard(tmp, "deap");
+    const a = createTask(tmp, "cyc-a", "--domain", "deap");
+    const b = createTask(tmp, "cyc-b", "--domain", "deap");
+    // task.py has no blocked_by sugar yet — patch the formal field directly.
+    const patch = (dirName: string, blockedBy: string) => {
+      const data = readTaskJson(tmp, dirName);
+      fs.writeFileSync(
+        path.join(tmp, ".trellis", "tasks", dirName, "task.json"),
+        JSON.stringify({ ...data, blocked_by: [blockedBy] }, null, 2),
+        "utf-8",
+      );
+    };
+    patch(a, b);
+    patch(b, a);
+
+    const r = runContext(tmp);
+
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain("无可开工票");
+    expect(r.stdout).toMatch(/ready\s*0\s*·\s*blocked\s*2/);
+  });
+
+  it("get_context omits 下一票 when no ticket is active", () => {
+    seedDomains(tmp);
+    makeBoard(tmp, "deap");
+
+    const r = runContext(tmp);
+
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain("当前战线");
+    expect(r.stdout).not.toContain("下一票");
+  });
+
+  it("get_context omits 下一票 without the domains layer (gated section)", () => {
+    createTask(tmp, "no-domains-next");
+
+    const r = runContext(tmp);
+
+    expect(r.status).toBe(0);
+    expect(r.stdout).not.toContain("下一票");
   });
 });

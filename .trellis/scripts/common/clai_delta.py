@@ -3,8 +3,8 @@
 
 This file is the single place the CLAI (ClaiDevSkill) fork diverges from
 upstream Trellis in script logic. Call sites stay thin: one or two lines in
-`task.py` (start gate / finish warn), `common/task_store.py` (create sugar /
-archive warn), `common/task_context.py` (validate reconcile), and
+`task.py` (start gates / finish warn), `common/task_store.py` (create sugar /
+archive gates), `common/task_context.py` (validate reconcile), and
 `common/session_context.py` (context rendering) delegate here.
 
 CLAI DELTA LIST (numbered for the contract document — when an upstream
@@ -19,6 +19,10 @@ CLAI DELTA LIST (numbered for the contract document — when an upstream
             (旗行), start is refused with the flag reported. Own flag or a
             stale flag (>24h) proceeds. This is the only mechanical gate in
             the flag protocol — flag insertion/removal itself stays manual.
+            Identity resolution (D8): `TRELLIS_WRITER` wins, else
+            `{platform}-{machine}` from the repo's own config dirs, so a Qoder
+            / Codex / Claude session no longer computes a Devin identity and
+            cannot mistake Devin's live flag for its own.
     CLAI-3  task.py validate domain ↔ REGISTRY reconciliation
             Every directory under .trellis/domains/ (except _scaffold) must
             have a REGISTRY.md line, and every REGISTRY line must resolve to
@@ -32,21 +36,67 @@ CLAI DELTA LIST (numbered for the contract document — when an upstream
             writer's flag, warn (旗未拔) — never auto-delete, never block.
     CLAI-5  get_context 当前战线 (battle lines) section
             One line per REGISTRY-registered board: slug, purpose, flag
-            status, progress row count.
+            status, progress row count. Plus 下一票 (NEXT UP): the dependency
+            frontier's head (first startable ticket) — the mechanical
+            re-entry after an archive, matching the `next:` line the
+            per-turn hook appends to the no_task breadcrumb (both read
+            the same common/frontier.py — no second query implementation).
     CLAI-6  get_context 当前模式 (autonomy) line
-            Reads .trellis/config.yaml `autonomy:`; `gated` | `hands-off`,
-            default hands-off when the key is absent or unrecognized.
+            Reads .trellis/config.yaml `autonomy:`; `gated` | `hands-off` |
+            `supervised-delivery`, default hands-off when the key is absent or
+            unrecognized (an unrecognized value never becomes the push tier).
+    CLAI-7  start artifact gate + archive design-review gate
+            `start` refuses a routed task (meta.domain resolving to an
+            existing board) whose prd.md lacks a well-formed `Domain:` line,
+            and — in `verify_required: true` repos — a task without a
+            verification contract. `archive` refuses a frontend task
+            (meta.frontend, else best-effort branch-diff detection) whose
+            implement.md lacks a `## Design review` section.
+            Scoping rule: fires only on positive routing intent — a task
+            with neither meta.domain nor a `Domain:` line passes, so
+            pre-domain-layer tickets are never retro-locked.
+    CLAI-8  task.py delivery-gate <ref> [--json]
+            The push answer for `trellis run`, per the three-tier model in the
+            domain's `02-e2e-delivery-gate-model.md`. Decision order is
+            load-bearing: tier (`supervised-delivery` only — every other tier
+            refuses outright), then protected positions (a whitelist entry
+            never outvotes the default branch or a tag), then
+            `delivery.auto_push_refs`. Protected-ness is decided by git facts
+            (`refs/remotes/origin/HEAD` → `git remote show origin` → the main
+            tree's own HEAD when there is no remote to ask), not by platform
+            wording. Everything else is a refusal, never a warning: nobody is
+            watching. An empty or malformed whitelist fails closed — an empty
+            list is exactly `hands-off` behaviour, which is what makes the
+            upgrade safe by default.
+            Consumers of the older two-value check are unaffected: `verify.py`
+            only asks `!= "gated"`, so the third tier behaves like hands-off
+            there by design.
+    CLAI-9  task.py set-worktree <dir> <path>|- / task.py set-pr <dir> <url>
+            The two formal `task.json` fields the loop runner writes and no
+            other command owns: `worktree_path` (declared by the schema, never
+            written — a ticket's worktree was undiscoverable outside the session
+            that made it; `-` clears it once the worktree is torn down) and
+            `pr_url` (the review pointer `gh pr create` prints). Path must exist
+            as a directory, URL must be http(s) — a refusal means a typo, not a
+            state the runner can legitimately be in.
 
-Writer identity (own-writer matching): `TRELLIS_WRITER` env var wins;
-otherwise `devin-<hostname>` — the convention used by Devin agents in
-dogfood. A flag's writer field is an opaque string compared by equality.
-Repos whose hygiene rules ban machine identifiers in committed files
-(e.g. "no hostnames in git history") should set `TRELLIS_WRITER` to a
-neutral alias like `devin` — the protocol only needs uniqueness.
+Writer identity (own-writer matching): `TRELLIS_WRITER` env var wins; otherwise
+`{platform}-{hostname}`, the platform read from the repo's own config dirs
+(`common/cli_adapter.detect_platform`) — Devin sessions therefore keep the
+`devin-<hostname>` string they always produced. A flag's writer field is an
+opaque string compared by equality.
+Agents that name themselves with a writer suffix (`qoder-HOST-agent`, the shape
+the domain boards actually carry) must set `TRELLIS_WRITER` to that exact string
+— detection cannot guess a suffix. Repos whose hygiene rules ban machine
+identifiers in committed files (e.g. "no hostnames in git history") should set
+`TRELLIS_WRITER` to a neutral alias like `devin` — the protocol only needs
+uniqueness.
 """
 
 from __future__ import annotations
 
+import argparse
+import json
 import os
 import re
 import socket
@@ -55,9 +105,11 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from .io import read_json_checked, write_json
+from . import git
+from .io import describe_json_read_failure, read_json_checked, write_json
 from .log import Colors, colored
-from .paths import DIR_WORKFLOW
+from .paths import DIR_WORKFLOW, FILE_TASK_JSON, get_repo_root
+from .task_utils import resolve_task_dir
 from .trellis_config import read_trellis_config
 
 
@@ -75,7 +127,12 @@ FILE_REGISTRY = "REGISTRY.md"
 FILE_BOARD_README = "README.md"
 
 DEFAULT_AUTONOMY = "hands-off"
-KNOWN_AUTONOMY = {"gated", "hands-off"}
+# `supervised-delivery` (CLAI-8) is the tier that may push; see KNOWN_AUTONOMY
+# readers in `02-e2e-delivery-gate-model.md` and DISCIPLINE §4.
+TIER_GATED = "gated"
+TIER_HANDS_OFF = "hands-off"
+TIER_SUPERVISED = "supervised-delivery"
+KNOWN_AUTONOMY = {TIER_GATED, TIER_HANDS_OFF, TIER_SUPERVISED}
 
 # A foreign flag older than this is 腐旗 (stale) — start proceeds; the flag
 # protocol's three-anchor evidence rules decide whether it may be replaced.
@@ -97,16 +154,32 @@ _WORKLOG_STATUS_RE = re.compile(r"^\s*-\s*\*\*状态\*\*：\s*\[([~x])\]")
 # Writer identity + slug validation (CLAI-1/2/4 shared)
 # =============================================================================
 
-def own_writer_id() -> str:
+def own_writer_id(repo_root: Path | None = None) -> str:
     """Return this session's writer identity for flag ownership checks.
 
-    `TRELLIS_WRITER` wins (explicit identity, and the deterministic fixture
-    knob); otherwise `devin-<hostname>` — the Devin dogfood convention.
+    `TRELLIS_WRITER` wins (explicit identity — the deterministic fixture knob and
+    the escape for agents that name themselves with a writer suffix, e.g.
+    `qoder-HOST-agent`; the protocol only needs the string to be stable).
+    Otherwise `{platform}-{machine}`, with the platform read from the repo's own
+    config directories by `common/cli_adapter.detect_platform`.
+
+    Before this, the identity was hard-coded to `devin-<hostname>`, so a Qoder /
+    Claude / Codex session computed a Devin identity: another agent's live flag
+    on the same machine read as its own, and `start` walked over it. Devin
+    machines keep producing the same string as before.
     """
     override = os.environ.get(ENV_WRITER, "").strip()
     if override:
         return override
-    return f"devin-{socket.gethostname()}"
+    try:
+        from .cli_adapter import detect_platform
+
+        platform = detect_platform(repo_root or Path.cwd())
+    except Exception:
+        # Detection is a convenience; failing it must not turn every existing
+        # Devin flag into a foreign one.
+        platform = "devin"
+    return f"{platform}-{socket.gethostname()}"
 
 
 def domain_slug_ok(slug: object) -> bool:
@@ -279,6 +352,10 @@ def flag_conflict(
     be verified). Own flag, stale flag (>24h), missing board/README/flag all
     proceed — a stale flag is reported on stderr as advisory.
     """
+    if own is None:
+        # Ownership is decided against this repo's platform, so the probe needs
+        # this repo's root.
+        own = own_writer_id(repo_root)
     board = board_dir_for(repo_root, slug)
     if board is None:
         return None
@@ -514,6 +591,52 @@ def battle_lines(
     return lines
 
 
+def next_up_lines(repo_root: Path) -> list[str]:
+    """Build the 下一票 (NEXT UP) section lines from the D1 frontier. D2.
+
+    next_up_lines builds the 下一票 (NEXT UP) section from the D1 frontier.
+
+    Emitted only for repos with the domains layer; empty when there is
+    nothing active. Answers "what starts next" mechanically — after an
+    archive the session re-enters at the frontier head, the same head the
+    per-turn hook renders as the `next:` line on the no_task breadcrumb
+    (both read common/frontier.py — no second query implementation).
+
+    Head only — `task.py frontier` prints the full ready/blocked list.
+    """
+    domains_dir = Path(repo_root) / DIR_WORKFLOW / DIR_DOMAINS
+    if not domains_dir.is_dir():
+        return []
+    try:
+        # Local import keeps an older common/frontier.py from taking down
+        # the whole context render.
+        from . import frontier
+        result = frontier.compute_frontier(repo_root)
+    except Exception:
+        return []
+
+    ready = result.get("ready") or []
+    blocked = result.get("blocked") or []
+    cycles = result.get("cycles") or []
+    if not ready and not blocked:
+        return []
+
+    lines = ["## 下一票 (NEXT UP)"]
+    if ready:
+        head = ready[0]
+        domain = f" @{head['domain']}" if head.get("domain") else ""
+        lines.append(
+            f"  - {head['dir']}/ ({head['status']}) [{head['priority']}]"
+            f"{domain} {head['title']}"
+        )
+    else:
+        lines.append("  - （无可开工票 — 依赖未满足）")
+    lines.append(
+        f"  ready {len(ready)} · blocked {len(blocked)} · cycles {len(cycles)}"
+    )
+    return lines
+
+
 def append_domain_context(lines: list[str], repo_root: Path) -> None:
     """Append CLAI-5/6 context output onto `lines` (thin call-site helper)."""
     lines.append("## 当前模式 (AUTONOMY)")
@@ -523,3 +646,482 @@ def append_domain_context(lines: list[str], repo_root: Path) -> None:
     if section:
         lines.extend(section)
         lines.append("")
+    next_up = next_up_lines(repo_root)
+    if next_up:
+        lines.extend(next_up)
+        lines.append("")
+
+
+# =============================================================================
+# CLAI-7 — start artifact gate + archive design-review gate
+# =============================================================================
+
+FILE_PRD = "prd.md"
+FILE_IMPLEMENT = "implement.md"
+# The `Domain:` line lives atop prd.md (DISCIPLINE §1 / workflow §1.5); a
+# bounded head scan avoids matching a stray mention deeper in the body.
+PRD_DOMAIN_SCAN_LINES = 40
+
+_DOMAIN_LINE_RE = re.compile(r"^\s*Domain\s*[:：]\s*(.+?)\s*$")
+_DOMAIN_PATH_RE = re.compile(r"\.trellis/domains/([a-z0-9][a-z0-9-]*)/?")
+# `none（<reason>）` — the reason is mandatory; parens may be full- or
+# half-width. A bare `none` is a shape error, not a valid declaration.
+_DOMAIN_NONE_RE = re.compile(r"none\s*[（(]\s*\S.*?[）)]\s*$", re.IGNORECASE)
+
+# frontend-craft contract: a task is frontend when the files it touched match
+# its `paths:` globs, or meta.frontend says so. Mechanical detection keeps the
+# same two signals — the meta override, else the task branch's diff.
+_DESIGN_REVIEW_RE = re.compile(r"^#{2,}\s+Design review\b", re.MULTILINE)
+FRONTEND_SUFFIXES = frozenset(
+    (".tsx", ".jsx", ".vue", ".svelte", ".astro", ".css", ".scss", ".less", ".html")
+)
+FRONTEND_SPEC_PATHS = frozenset(
+    (".trellis/spec/product.md", ".trellis/spec/design-system.md")
+)
+
+
+def read_prd_domain_value(prd_path: Path) -> str | None:
+    """Return the `Domain:` line's value from atop prd.md, or None (absent)."""
+    try:
+        with Path(prd_path).open("r", encoding="utf-8") as fh:
+            head = [next(fh, "") for _ in range(PRD_DOMAIN_SCAN_LINES)]
+    except OSError:
+        return None
+    for line in head:
+        match = _DOMAIN_LINE_RE.match(line)
+        if match:
+            return match.group(1).strip()
+    return None
+
+
+def classify_domain_value(value: str) -> str | None:
+    """Classify a `Domain:` value: 'board' | 'none'; None when malformed."""
+    if _DOMAIN_PATH_RE.fullmatch(value):
+        return "board"
+    if _DOMAIN_NONE_RE.fullmatch(value):
+        return "none"
+    return None
+
+
+def start_artifact_problems(task_json_path: Path, repo_root: Path) -> list[str]:
+    """CLAI-7: artifact problems that refuse `start` ([] = pass).
+
+    Fires on routing intent, not on every task: either meta.domain resolves
+    to a board, or prd.md carries a `Domain:` line (shape-checked). Tasks
+    with neither pass — pre-domain-layer tickets (Laber/Rakazo history) are
+    never retro-locked by a `trellis update`.
+
+    In a `verify_required: true` repo a missing verification contract also
+    refuses start: the same opt-in that makes archive refuse should fail
+    before the work, not after it. A contract that exists and fails stays
+    the archive gate's business.
+    """
+    json_path = Path(task_json_path)
+    data, _reason = read_json_checked(json_path)
+    if not isinstance(data, dict):
+        data = {}
+
+    domain: str | None = None
+    meta = data.get("meta")
+    if isinstance(meta, dict):
+        candidate = meta.get("domain")
+        if isinstance(candidate, str) and candidate.strip():
+            domain = candidate.strip()
+    routed = board_dir_for(repo_root, domain) is not None
+
+    problems: list[str] = []
+    prd_path = json_path.parent / FILE_PRD
+    prd_exists = prd_path.is_file()
+    value = read_prd_domain_value(prd_path) if prd_exists else None
+
+    if routed or value is not None:
+        if not prd_exists:
+            problems.append(
+                f"prd.md is missing — this task is routed (meta.domain={domain}) "
+                "and must carry a `Domain:` line atop its prd."
+            )
+        elif value is None:
+            problems.append(
+                f"prd.md has no `Domain:` line — meta.domain={domain} routes "
+                "this task to a board. Add one of:\n"
+                f"    Domain: .trellis/domains/{domain}/\n"
+                "    Domain: none（<one-line reason>）"
+            )
+        elif classify_domain_value(value) is None:
+            problems.append(
+                f"malformed `Domain:` line: '{value}' — use "
+                "`.trellis/domains/<slug>/` or `none（<one-line reason>）` "
+                "(a bare slug is neither form)."
+            )
+
+    from . import verify as verify_module  # local: verify imports clai_delta
+
+    if verify_module.verify_required(repo_root):
+        specs, _shape_problems = verify_module.verify_specs(data)
+        if not specs:
+            problems.append(
+                "no verification contract — this repo sets "
+                "`verify_required: true`. Record one first: "
+                "task.py add-verify <task> '<command>'"
+            )
+
+    return problems
+
+
+def _tri_state(value: object) -> bool | None:
+    """Coerce a meta.frontend value: True/False, or None when unset/opaque."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in ("true", "yes", "1"):
+            return True
+        if lowered in ("false", "no", "0"):
+            return False
+    return None
+
+
+def _frontend_by_branch_diff(repo_root: Path, task_data: dict) -> bool:
+    """Best-effort: did this task's branch touch frontend files?
+
+    False when undetectable (no branch metadata, refs gone, git unavailable)
+    — an unknowable frontend-ness must not block archive. The automation
+    path keeps the branch alive, so detection works where it matters.
+    """
+    branch = task_data.get("branch")
+    base = task_data.get("base_branch")
+    if not (
+        isinstance(branch, str)
+        and branch.strip()
+        and isinstance(base, str)
+        and base.strip()
+        and branch.strip() != base.strip()
+    ):
+        return False
+    rc, out, _err = git.run_git(
+        ["merge-base", base.strip(), branch.strip()], cwd=repo_root, timeout=30
+    )
+    if rc != 0 or not out.strip():
+        return False
+    base_oid = out.strip().splitlines()[0].strip()
+    rc, out, _err = git.run_git(
+        ["diff", "--name-only", base_oid, branch.strip()], cwd=repo_root, timeout=30
+    )
+    if rc != 0:
+        return False
+    for raw in out.splitlines():
+        name = raw.strip().replace("\\", "/")
+        if not name:
+            continue
+        if name in FRONTEND_SPEC_PATHS:
+            return True
+        if os.path.splitext(name)[1].lower() in FRONTEND_SUFFIXES:
+            return True
+    return False
+
+
+def frontend_design_problems(
+    task_data: dict, task_dir: Path, repo_root: Path
+) -> list[str]:
+    """CLAI-7 archive gate: frontend tasks need `## Design review` recorded.
+
+    Frontend-ness follows the frontend-craft contract: `meta.frontend`
+    overrides both ways; absent an explicit value, best-effort branch-diff
+    detection applies. The fix is the artifact, not a flag — write the
+    section (an explicit skip justification inside it counts).
+    """
+    meta = task_data.get("meta")
+    marked = _tri_state(meta.get("frontend")) if isinstance(meta, dict) else None
+    if marked is False:
+        return []
+    if marked is None and not _frontend_by_branch_diff(repo_root, task_data):
+        return []
+    implement_path = Path(task_dir) / FILE_IMPLEMENT
+    try:
+        text = implement_path.read_text(encoding="utf-8")
+    except OSError:
+        text = ""
+    if _DESIGN_REVIEW_RE.search(text):
+        return []
+    return [
+        "frontend task without a `## Design review` section in implement.md — "
+        "record which of audit/critique/polish ran (engine or degraded), the "
+        "findings, and each disposition (fixed / deferred / rejected); an "
+        "empty \"no findings\" entry is valid only if the commands ran."
+    ]
+
+
+# =============================================================================
+# CLAI-9 — run setters: worktree pointer + review pointer (run support)
+# =============================================================================
+
+# Sentinel clearing the pointer; a path argument is never a bare `-`.
+WORKTREE_CLEAR_ARG = "-"
+
+_PR_URL_RE = re.compile(r"^https?://\S+$", re.IGNORECASE)
+
+
+def _read_for_write(task_json: Path) -> dict | None:
+    """Read a task.json a command is about to rewrite, reporting any failure.
+
+    A record we cannot read is not a record we may rewrite — overwriting here
+    would silently discard whatever the failure was. Message shape mirrors
+    task_store._report_read_failure (importing it would cycle back here).
+    """
+    data, reason = read_json_checked(task_json)
+    if data is not None:
+        return data
+    problem, hint = describe_json_read_failure(task_json, reason)
+    print(colored(f"Error: {problem}", Colors.RED), file=sys.stderr)
+    print(hint, file=sys.stderr)
+    return None
+
+
+def _write_task_field(args: argparse.Namespace, field: str, value: object) -> int:
+    """Shared body of the CLAI-9 setters: one field, one write, no reformat."""
+    target_dir = resolve_task_dir(args.dir, get_repo_root())
+    if target_dir is None:
+        return 1
+
+    task_json = target_dir / FILE_TASK_JSON
+    if not task_json.is_file():
+        print(colored(f"Error: task.json not found at {target_dir}", Colors.RED))
+        return 1
+
+    data = _read_for_write(task_json)
+    if data is None:
+        return 1
+
+    data[field] = value
+    if not write_json(task_json, data):
+        print(colored(f"Error: failed to write {task_json}", Colors.RED))
+        return 1
+    return 0
+
+
+def cmd_set_worktree(args: argparse.Namespace) -> int:
+    """`task.py set-worktree <dir> <path>|-` — record the ticket's worktree."""
+    value = getattr(args, "path", "")
+    if not value:
+        print(colored("Error: Missing arguments", Colors.RED))
+        print("Usage: python3 task.py set-worktree <task-dir> <path>|-")
+        return 1
+
+    repo_root = get_repo_root()
+    if value == WORKTREE_CLEAR_ARG:
+        resolved: str | None = None
+    else:
+        candidate = Path(value)
+        if not candidate.is_absolute():
+            candidate = repo_root / candidate
+        # The runner creates the worktree before recording it, so a refusal can
+        # only mean a typo or a tree already torn down.
+        if not candidate.is_dir():
+            print(colored(f"Error: not a directory: {value}", Colors.RED))
+            print("Create the worktree first (`git worktree add`), or pass `-` to clear.")
+            return 1
+        resolved = str(candidate)
+
+    if _write_task_field(args, "worktree_path", resolved) != 0:
+        return 1
+    state = "cleared" if resolved is None else f"→ {resolved}"
+    print(colored(f"✓ worktree_path {state}", Colors.GREEN))
+    return 0
+
+
+# =============================================================================
+# CLAI-8 — the delivery tier and protected-ref mechanics (supervised-delivery)
+# =============================================================================
+
+DELIVERY_SECTION = "delivery"
+AUTO_PUSH_REFS_KEY = "auto_push_refs"
+PROTECTED_REFS_KEY = "protected_refs"
+
+
+def _ref_glob(glob: str) -> re.Pattern[str]:
+    """Compile a ref whitelist glob.
+
+    `*` stops at `/`, so `feature/*` admits `feature/ticket` but not
+    `feature/a/b`. A whitelist that allows less than it appears to allow is the
+    safe direction for something an unattended loop can trigger.
+    """
+    return re.compile("^" + "[^/]*".join(re.escape(p) for p in glob.split("*")) + "$")
+
+
+def _ref_matches(ref: str, globs: list[str]) -> str | None:
+    """The first glob that matches `ref`, or None."""
+    for glob in globs:
+        if _ref_glob(glob).match(ref):
+            return glob
+    return None
+
+
+def read_delivery_config(repo_root: Path) -> dict:
+    """`delivery:` section of config.yaml, shape-checked.
+
+    Absent keys read as empty lists. A scalar where a list belongs is reported
+    as `malformed` rather than coerced — an unparseable whitelist must not
+    silently become no whitelist or a guessed one.
+    """
+    raw = read_trellis_config(repo_root).get(DELIVERY_SECTION)
+    result = {"auto_push_refs": [], "protected_refs": [], "malformed": None}
+    if raw is None:
+        return result
+    if not isinstance(raw, dict):
+        result["malformed"] = f"{DELIVERY_SECTION} is not a mapping"
+        return result
+
+    for key, target in ((AUTO_PUSH_REFS_KEY, "auto_push_refs"), (PROTECTED_REFS_KEY, "protected_refs")):
+        value = raw.get(key)
+        if value is None:
+            continue
+        if isinstance(value, list):
+            result[target] = [str(v).strip() for v in value if str(v).strip()]
+        else:
+            result["malformed"] = f"{DELIVERY_SECTION}.{key} is not a list"
+    return result
+
+
+def default_branch_facts(repo_root: Path) -> tuple[str | None, str]:
+    """(default branch, how it was learned) — git facts only.
+
+    `git.resolve_default_branch` reads `refs/remotes/origin/HEAD` then
+    `git remote show origin`. Either can fail with a remote configured — an
+    offline host, or a bare repo whose own HEAD points at a branch that was
+    never pushed. Leaving the answer "unknown" there would mean a `*` whitelist
+    could push the trunk, so the last resort is the branch the main working tree
+    itself has checked out, reported as such. It can over-protect (a ticket
+    branch checked out in the main tree gets refused); over-protecting is the
+    safe direction for a loop nobody is watching.
+    """
+    resolved = git.resolve_default_branch(repo_root)
+    if resolved:
+        return resolved, "remote_head"
+
+    main_root = git.main_worktree_root(repo_root) or repo_root
+    head = git.current_branch_name(main_root)
+    if head:
+        return head, "local_head_fallback"
+    return None, "none"
+
+
+def ref_is_tag(repo_root: Path, ref: str) -> bool:
+    """Whether `ref` names an existing tag, locally first, then on the remote."""
+    rc, _out, _err = git.run_git(
+        ["rev-parse", "--verify", "--quiet", f"refs/tags/{ref}"], cwd=repo_root
+    )
+    if rc == 0:
+        return True
+    if not git.has_git_remote(repo_root):
+        return False
+    rc, out, _err = git.run_git(
+        ["ls-remote", "--tags", "origin", f"refs/tags/{ref}"], cwd=repo_root, timeout=20
+    )
+    return rc == 0 and bool(out.strip())
+
+
+def delivery_decision(repo_root: Path, ref: str) -> tuple[bool, str, dict]:
+    """May anything push `ref`? Returns (allow, reason, facts).
+
+    Order is load-bearing: tier first (only `supervised-delivery` pushes at
+    all), then protected positions (a whitelist entry must not outvote the
+    default branch or a tag), then the whitelist itself. Everything else is a
+    refusal — a warning would be invisible to nobody in particular.
+    """
+    tier = read_autonomy(repo_root)
+    cfg = read_delivery_config(repo_root)
+    default_branch, default_source = default_branch_facts(repo_root)
+    is_tag = ref_is_tag(repo_root, ref)
+    remote = git.has_git_remote(repo_root)
+
+    facts = {
+        "tier": tier,
+        "ref": ref,
+        "remote": remote,
+        "default_branch": default_branch,
+        "default_source": default_source,
+        "is_tag": is_tag,
+        "auto_push_refs": cfg["auto_push_refs"],
+        "protected_refs": cfg["protected_refs"],
+        # Machine-readable refusal class. Callers branch on this, never on the
+        # human `reason` text — a reason is prose meant for a ledger line, and
+        # matching it with a regex silently reclassifies on every rewording.
+        "code": "unknown",
+    }
+
+    if tier != TIER_SUPERVISED:
+        facts["code"] = "tier"
+        return False, f"tier({tier}) — push needs supervised-delivery", facts
+    if default_branch and ref == default_branch:
+        facts["code"] = "protected"
+        return False, f"protected_ref(default_branch={default_branch};{default_source})", facts
+    if is_tag:
+        facts["code"] = "protected"
+        return False, "protected_ref(tag)", facts
+    hit_protected = _ref_matches(ref, cfg["protected_refs"])
+    if hit_protected:
+        facts["code"] = "protected"
+        return False, f"protected_ref(configured:{hit_protected})", facts
+    if cfg["malformed"]:
+        facts["code"] = "config"
+        return False, f"malformed_auto_push_refs({cfg['malformed']})", facts
+    if not cfg["auto_push_refs"]:
+        facts["code"] = "deferred"
+        return False, "empty_auto_push_refs(degrades to hands-off)", facts
+    hit = _ref_matches(ref, cfg["auto_push_refs"])
+    if hit:
+        facts["code"] = "allowed"
+        return True, f"whitelist({hit})", facts
+    facts["code"] = "whitelist"
+    return False, "outside_auto_push_refs", facts
+
+
+def cmd_delivery_gate(args: argparse.Namespace) -> int:
+    """`task.py delivery-gate <ref> [--json]` — the push answer for the runner."""
+    repo_root = get_repo_root()
+    ref = str(getattr(args, "ref", "") or "").strip()
+    if not ref:
+        print(colored("Error: Missing arguments", Colors.RED))
+        print("Usage: python3 task.py delivery-gate <ref> [--json]")
+        return 1
+
+    allow, reason, facts = delivery_decision(repo_root, ref)
+
+    if getattr(args, "json", False):
+        print(
+            json.dumps(
+                {
+                    "allow": allow,
+                    "reason": reason,
+                    "code": facts["code"],
+                    "tier": facts["tier"],
+                    "ref": ref,
+                    "facts": facts,
+                },
+                ensure_ascii=False,
+            )
+        )
+    elif allow:
+        print(colored(f"✓ push allowed: {ref} — {reason}", Colors.GREEN))
+    else:
+        print(colored(f"✗ push refused: {ref} — {reason}", Colors.RED))
+    return 0 if allow else 1
+
+
+def cmd_set_pr(args: argparse.Namespace) -> int:
+    """`task.py set-pr <dir> <url>` — record the review pointer for the ticket."""
+    value = getattr(args, "url", "")
+    if not value:
+        print(colored("Error: Missing arguments", Colors.RED))
+        print("Usage: python3 task.py set-pr <task-dir> <pr-url>")
+        return 1
+
+    if not _PR_URL_RE.fullmatch(value.strip()):
+        print(colored(f"Error: not a url: {value}", Colors.RED))
+        print("Expected an http(s) review URL, e.g. the value `gh pr create` prints.")
+        return 1
+
+    if _write_task_field(args, "pr_url", value.strip()) != 0:
+        return 1
+    print(colored(f"✓ pr_url → {value.strip()}", Colors.GREEN))
+    return 0

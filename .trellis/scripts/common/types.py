@@ -46,6 +46,13 @@ class TaskData(TypedDict, total=False):
     subtasks: list[str]
     children: list[str]
     parent: str | None
+    # Task dirs this one waits on. Inverse edges are derived, never stored, so
+    # the graph has exactly one writable side (see common/frontier.py).
+    blocked_by: list[str]
+    # Commands that prove the task is done; `archive` runs them rather than
+    # trusting a stored result (see common/verify.py).
+    verify: list[dict]
+    verify_skipped: dict
     relatedFiles: list[str]
     notes: str
     meta: dict

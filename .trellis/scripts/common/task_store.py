@@ -25,6 +25,8 @@ from datetime import datetime
 from pathlib import Path
 
 from . import clai_delta
+from . import frontier
+from . import verify
 from .config import (
     get_codex_dispatch_mode,
     get_packages,
@@ -1368,6 +1370,29 @@ def cmd_archive(args: argparse.Namespace) -> int:
                 )
                 return 1
 
+            # Verification is the evidence the work is done; run it now instead
+            # of trusting anything recorded earlier — a stored "passed" flag goes
+            # stale the moment the base branch moves.
+            if not verify.archive_gate(data, task_dir, args, repo_root):
+                print(
+                    f"Not archived: {_repo_relative_path(task_dir, repo_root)} is unchanged.",
+                    file=sys.stderr,
+                )
+                return 1
+
+            # CLAI-7: a frontend task must record its design review before it
+            # can archive — the frontend-craft contract's `## Design review`
+            # section, mechanized.
+            design_problems = clai_delta.frontend_design_problems(data, task_dir, repo_root)
+            if design_problems:
+                for problem in design_problems:
+                    print(colored(f"Error: {problem}", Colors.RED), file=sys.stderr)
+                print(
+                    f"Not archived: {_repo_relative_path(task_dir, repo_root)} is unchanged.",
+                    file=sys.stderr,
+                )
+                return 1
+
             data["status"] = "completed"
             data["completedAt"] = today
             if not write_json(task_json_path, data):
@@ -1946,6 +1971,22 @@ def cmd_set_meta(args: argparse.Namespace) -> int:
     if data is None:
         _report_read_failure(task_json, reason)
         return 1
+
+    if key == "blocked_by":
+        # Blockers live in a formal field so `task.py frontier` can resolve the
+        # graph without guessing which meta keys mean what.
+        refs = frontier.blocked_by_refs({"blocked_by": value})
+        data["blocked_by"] = refs
+        existing_meta = data.get("meta")
+        if isinstance(existing_meta, dict) and "blocked_by" in existing_meta:
+            del existing_meta["blocked_by"]
+            data["meta"] = existing_meta
+            print(colored("Note: cleared the legacy meta.blocked_by copy", Colors.YELLOW))
+        if not write_json(task_json, data):
+            _report_write_failure(task_json)
+            return 1
+        print(colored(f"✓ Blockers set: {', '.join(refs) or '(none)'}", Colors.GREEN))
+        return 0
 
     meta = data.get("meta")
     if not isinstance(meta, dict):
