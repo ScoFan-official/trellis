@@ -72,9 +72,11 @@ export interface RunnerPorts {
   /**
    * CLAI-8: may this repo push `ref`? The tier + whitelist answer comes from
    * `task.py delivery-gate`, so config is the only source of truth about
-   * delivery — a CLI flag would be a second one.
+   * delivery — a CLI flag would be a second one. `code` is the machine-readable
+   * refusal class (`tier` / `protected` / `whitelist` / `config` / `deferred`);
+   * callers branch on it, never on the human `reason` prose.
    */
-  deliveryGate(ref: string): { allow: boolean; reason: string; tier: string };
+  deliveryGate(ref: string): { allow: boolean; reason: string; tier: string; code: string };
   /** Read one top-level string field of the main repo's copy of a ticket. */
   taskField(dir: string, field: string): string | null;
   /**
@@ -121,7 +123,8 @@ export type StopReason =
   | "frontier_error"
   | "fail_threshold"
   | "delivery_deferred"
-  | "push_refused";
+  | "push_refused"
+  | "always_stop";
 
 export interface RunResult {
   stopped: StopReason;
@@ -214,10 +217,15 @@ function curateContext(dir: string, worktree: string, ports: RunnerPorts): void 
 }
 
 /**
- * Paths a fallback commit must never sweep in. The runner stages by explicit
- * pathspec (never `git add -A`), and anything matching these stops the ticket
- * instead — a board file or a secret in the working tree is a human's call, not
- * an unattended commit's.
+ * Paths an unattended run must never put in front of a reviewer. The runner
+ * stages by explicit pathspec (never `git add -A`) and refuses these on the way
+ * in; the same list is then checked against what the branch actually carries,
+ * because the worker commits on its own and its choices are not ours to ship.
+ * A board file or a secret is a human's call, not an automated delivery's.
+ *
+ * Match secret *shapes*, not the word "secret": since the list also gates
+ * delivery, an over-broad fragment no longer costs one ticket — it halts the
+ * whole line. `use-secret-store.ts` is application code; `secrets.yaml` is not.
  */
 const PROTECTED_FRAGMENTS = [
   ".trellis/domains/",
@@ -228,7 +236,12 @@ const PROTECTED_FRAGMENTS = [
   ".git-credentials",
   "credentials.json",
   ".keystore",
-  "secret",
+  "secrets/",
+  ".secrets",
+  "secrets.yaml",
+  "secrets.yml",
+  "secrets.json",
+  "secret.json",
 ];
 
 export function isProtectedPath(p: string): boolean {
@@ -443,6 +456,24 @@ async function runAttempt(
     detail: `${stagedByRunner}${commits} commit(s) ahead of ${base}; report: ${report || "-"}`,
   });
 
+  // always-stop is a refusal, not a warning, so it has to be checked against
+  // what actually landed on the branch — not only against what the runner is
+  // about to stage. A headless worker that committed `.env` or a board file
+  // itself would otherwise sail straight through to push + PR.
+  const landed = ports.git(["diff", "--name-only", `${base}..HEAD`], worktree);
+  const offender = landed.stdout
+    .split(/\r?\n/)
+    .map((p) => p.trim())
+    .filter((p) => p.length > 0)
+    .find(isProtectedPath);
+  if (offender) {
+    return {
+      kind: "stop",
+      reason: "always_stop",
+      detail: `${offender} landed on ${branch}; the line halts — a board file or a secret in a commit is a human's call`,
+    };
+  }
+
   const verify = ports.task(["run-verify", dir, "--json"], worktree);
   let verified = false;
   let verifyReason: string | undefined;
@@ -469,11 +500,14 @@ async function runAttempt(
     const gate = ports.deliveryGate(branch);
     if (!gate.allow) {
       // Two different refusals, on purpose (AC4/AC5): a tier that does not
-      // permit push at all is ordinary — the work stands on its branch. A
-      // protected position, or a ref the configured whitelist never named,
+      // permit push at all is ordinary — the work stands on its branch, and an
+      // empty whitelist degrades to hands-off the same way. Everything else
       // means the operator's intent and the ticket's shape disagree, so the
       // line halts for adjudication instead of a warning nobody is watching.
-      const adjudicate = /protected_ref|outside_auto_push_refs/.test(gate.reason);
+      // Classified on the gate's machine `code`, never on its prose: matching
+      // `reason` with a regex would silently reclassify on every rewording, and
+      // an unreadable answer must count as a refusal (fail closed).
+      const adjudicate = gate.code !== "tier" && gate.code !== "deferred";
       ports.ledgerAppend({
         ticket: dir,
         action: "delivery",
@@ -666,7 +700,9 @@ export async function runLoop(opts: RunOptions, ports: RunnerPorts): Promise<Run
     const step = await processOne(head, opts, ports);
 
     if (step.kind === "stop") {
-      ports.ledgerAppend({ ticket: head.dir, action: "stop", reason: step.detail });
+      // The machine reason leads the ledger line: "why did the line stop" has
+      // to be readable without re-parsing a human sentence.
+      ports.ledgerAppend({ ticket: head.dir, action: "stop", reason: `${step.reason}: ${step.detail}` });
       ports.log(`Stopped (${step.reason}): ${step.detail}`);
       return { stopped: step.reason, attempted, archived, failed };
     }
@@ -748,17 +784,20 @@ export function realPorts(
           allow?: boolean;
           reason?: string;
           tier?: string;
+          code?: string;
         };
         return {
           allow: parsed.allow === true,
           reason: parsed.reason ?? `unreadable_output(${firstLine(res.stderr || res.stdout)})`,
           tier: parsed.tier ?? "unknown",
+          code: parsed.code ?? "unreadable",
         };
       } catch {
         return {
           allow: false,
           reason: `unreadable_output(${firstLine(res.stderr || res.stdout) || `exit_${res.status}`})`,
           tier: "unknown",
+          code: "unreadable",
         };
       }
     },

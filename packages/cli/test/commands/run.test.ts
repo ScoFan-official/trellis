@@ -46,8 +46,14 @@ interface Script {
   existingWorktrees?: string[];
   /** Directories whose branch already archived them (a previous run). */
   closedOnBranch?: string[];
-  /** CLAI-8 answer for the ticket branch. Default: tier refuses any push. */
-  gate?: { allow?: boolean; reason?: string; tier?: string };
+  /**
+   * CLAI-8 answer for the ticket branch. Default: tier refuses any push.
+   * `code` is the machine refusal class; leave it out and the fake derives it
+   * from `reason` the way `delivery_decision` does.
+   */
+  gate?: { allow?: boolean; reason?: string; tier?: string; code?: string };
+  /** Paths the branch carries relative to base (`git diff --name-only`). */
+  branchFiles?: string[];
   /** Make the Nth `git push` (1-based) fail. */
   pushFail?: number;
   /** What `gh pr create` prints. Default: a real-looking PR URL. */
@@ -168,6 +174,7 @@ function harness(script: Script = {}): Harness {
           : ok();
       }
       if (verb === "remote") return ok(script.remote ? "origin\thttps://example.invalid/o/r.git (fetch)\n" : "");
+      if (verb === "diff") return ok((script.branchFiles ?? []).join("\n"));
       return ok();
     },
     gh(args) {
@@ -183,10 +190,29 @@ function harness(script: Script = {}): Harness {
     },
     deliveryGate(ref) {
       h.gateCalls.push(ref);
+      const reason = script.gate?.reason ?? "tier(hands-off) — push needs supervised-delivery";
+      // The fake plays `delivery_decision`: it emits the same refusal class the
+      // Python gate derives from its own reason string. Production code reads
+      // `code`, never the prose.
+      const derived =
+        script.gate?.allow === true
+          ? "allowed"
+          : reason.startsWith("tier(")
+            ? "tier"
+            : reason.startsWith("protected_ref")
+              ? "protected"
+              : reason.startsWith("malformed_auto_push_refs")
+                ? "config"
+                : reason.startsWith("empty_auto_push_refs")
+                  ? "deferred"
+                  : reason.startsWith("outside_auto_push_refs")
+                    ? "whitelist"
+                    : "unreadable";
       return {
         allow: script.gate?.allow === true,
-        reason: script.gate?.reason ?? "tier(hands-off) — push needs supervised-delivery",
+        reason,
         tier: script.gate?.tier ?? "hands-off",
+        code: script.gate?.code ?? derived,
       };
     },
     taskField(dir, field) {
@@ -410,6 +436,9 @@ describe("runLoop — the stop lines", () => {
   });
 
   it("fails closed when the gate answer cannot be read", async () => {
+    // An unreadable answer is a refusal, not a routine deferral: nobody is
+    // watching for a warning in an unattended run, so the line halts for
+    // adjudication and the ledger says refused.
     const h = harness({
       ready: [{ dir: "01-01-alpha" }],
       remote: true,
@@ -417,9 +446,83 @@ describe("runLoop — the stop lines", () => {
     });
     const result = await runLoop(baseOptions(), h.ports);
 
-    expect(result.stopped).toBe("delivery_deferred");
+    expect(result.stopped).toBe("push_refused");
     expect(h.pushed).toEqual([]);
     expect(h.taskCalls.some((c) => c.args[0] === "archive")).toBe(false);
+    expect(h.ledger.some((l) => l.action === "delivery" && /refused: unreadable_output/.test(l.reason ?? ""))).toBe(
+      true,
+    );
+  });
+
+  it("refuses a broken whitelist instead of booking it as a routine deferral", async () => {
+    // `malformed_auto_push_refs` means config and intent disagree, which is the
+    // same class of anomaly as a protected ref — not "the tier said no".
+    const h = harness({
+      ready: [{ dir: "01-01-alpha" }],
+      remote: true,
+      gate: {
+        reason: "malformed_auto_push_refs(not a list)",
+        tier: "supervised-delivery",
+        code: "config",
+      },
+    });
+    const result = await runLoop(baseOptions(), h.ports);
+
+    expect(result.stopped).toBe("push_refused");
+    expect(h.pushed).toEqual([]);
+    expect(h.ledger.some((l) => l.action === "delivery" && /refused: malformed_auto_push_refs/.test(l.reason ?? ""))).toBe(
+      true,
+    );
+  });
+
+  it("defers when an empty whitelist degrades the tier to hands-off", async () => {
+    // Documented behaviour, not an anomaly: no whitelist means no push rights.
+    const h = harness({
+      ready: [{ dir: "01-01-alpha" }],
+      remote: true,
+      gate: {
+        reason: "empty_auto_push_refs(degrades to hands-off)",
+        tier: "supervised-delivery",
+        code: "deferred",
+      },
+    });
+    const result = await runLoop(baseOptions(), h.ports);
+
+    expect(result.stopped).toBe("delivery_deferred");
+    expect(h.ledger.find((l) => l.action === "delivery")?.reason).toMatch(/^deferred: empty_auto_push_refs/);
+  });
+
+  it("halts the line when the worker's own commit carries an always-stop path", async () => {
+    // The fallback commit checks the working tree, but a worker that committed
+    // `.env` itself is not the runner's staging decision — it must still never
+    // reach a reviewer as an automated delivery.
+    const h = harness({
+      ready: [{ dir: "01-01-alpha" }],
+      remote: true,
+      branchFiles: ["src/app.ts", ".env"],
+      gate: { allow: true, reason: "whitelist(feature/*)", tier: "supervised-delivery" },
+    });
+    const result = await runLoop(baseOptions(), h.ports);
+
+    expect(result.stopped).toBe("always_stop");
+    expect(result.archived).toBe(0);
+    expect(h.pushed).toEqual([]);
+    expect(h.ghCalls).toEqual([]);
+    expect(h.taskCalls.some((c) => c.args[0] === "archive")).toBe(false);
+    expect(h.ledger.some((l) => l.action === "stop" && /always_stop/.test(l.reason ?? ""))).toBe(true);
+  });
+
+  it("delivers normally when the branch touches nothing protected", async () => {
+    const h = harness({
+      ready: [{ dir: "01-01-alpha" }],
+      remote: true,
+      branchFiles: ["src/app.ts", "src/secret-store.test.ts"],
+      gate: { allow: true, reason: "whitelist(feature/*)", tier: "supervised-delivery" },
+    });
+    const result = await runLoop(baseOptions(), h.ports);
+
+    expect(result.archived).toBe(1);
+    expect(h.pushed.length).toBe(2);
   });
 
   it("pushes, opens a ready PR and records the pointer when the gate allows the ref", async () => {
@@ -639,7 +742,10 @@ describe("parsePorcelain / isProtectedPath — the fallback commit's inputs", ()
     expect(isProtectedPath(".trellis/domains/deap/README.md")).toBe(true);
     expect(isProtectedPath(".env.local")).toBe(true);
     expect(isProtectedPath("keys/deploy.pem")).toBe(true);
+    expect(isProtectedPath("config/secrets.yaml")).toBe(true);
     expect(isProtectedPath("src/greeting.ts")).toBe(false);
+    // The word "secret" in application code must not halt a delivery lane.
+    expect(isProtectedPath("src/use-secret-store.ts")).toBe(false);
     expect(isProtectedPath(".trellis/tasks/10-09-greet/prd.md")).toBe(false);
   });
 });

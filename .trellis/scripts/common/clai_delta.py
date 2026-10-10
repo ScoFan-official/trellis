@@ -1043,24 +1043,36 @@ def delivery_decision(repo_root: Path, ref: str) -> tuple[bool, str, dict]:
         "is_tag": is_tag,
         "auto_push_refs": cfg["auto_push_refs"],
         "protected_refs": cfg["protected_refs"],
+        # Machine-readable refusal class. Callers branch on this, never on the
+        # human `reason` text — a reason is prose meant for a ledger line, and
+        # matching it with a regex silently reclassifies on every rewording.
+        "code": "unknown",
     }
 
     if tier != TIER_SUPERVISED:
+        facts["code"] = "tier"
         return False, f"tier({tier}) — push needs supervised-delivery", facts
     if default_branch and ref == default_branch:
+        facts["code"] = "protected"
         return False, f"protected_ref(default_branch={default_branch};{default_source})", facts
     if is_tag:
+        facts["code"] = "protected"
         return False, "protected_ref(tag)", facts
     hit_protected = _ref_matches(ref, cfg["protected_refs"])
     if hit_protected:
+        facts["code"] = "protected"
         return False, f"protected_ref(configured:{hit_protected})", facts
     if cfg["malformed"]:
+        facts["code"] = "config"
         return False, f"malformed_auto_push_refs({cfg['malformed']})", facts
     if not cfg["auto_push_refs"]:
+        facts["code"] = "deferred"
         return False, "empty_auto_push_refs(degrades to hands-off)", facts
     hit = _ref_matches(ref, cfg["auto_push_refs"])
     if hit:
+        facts["code"] = "allowed"
         return True, f"whitelist({hit})", facts
+    facts["code"] = "whitelist"
     return False, "outside_auto_push_refs", facts
 
 
@@ -1081,6 +1093,7 @@ def cmd_delivery_gate(args: argparse.Namespace) -> int:
                 {
                     "allow": allow,
                     "reason": reason,
+                    "code": facts["code"],
                     "tier": facts["tier"],
                     "ref": ref,
                     "facts": facts,

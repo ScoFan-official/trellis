@@ -97,6 +97,7 @@ describe.skipIf(PYTHON === null)("task.py delivery-gate", () => {
     expect(g.status).not.toBe(0);
     expect(g.payload.allow).toBe(false);
     expect(String(g.payload.reason)).toMatch(/tier\(hands-off\)/);
+    expect(g.payload.code).toBe("tier");
   });
 
   it("uses the same default as CLAI-6 when the key is absent", () => {
@@ -121,6 +122,7 @@ describe.skipIf(PYTHON === null)("task.py delivery-gate", () => {
     expect(g.status).toBe(0);
     expect(g.payload.allow).toBe(true);
     expect(String(g.payload.reason)).toMatch(/whitelist\(feature\/\*\)/);
+    expect(g.payload.code).toBe("allowed");
   });
 
   it("does not let `*` cross a path separator", () => {
@@ -128,6 +130,7 @@ describe.skipIf(PYTHON === null)("task.py delivery-gate", () => {
     const g = gate(repo, "feature/nested/ticket");
     expect(g.payload.allow).toBe(false);
     expect(String(g.payload.reason)).toMatch(/outside_auto_push_refs/);
+    expect(g.payload.code).toBe("whitelist");
   });
 
   it("fails closed when the whitelist is empty", () => {
@@ -136,6 +139,7 @@ describe.skipIf(PYTHON === null)("task.py delivery-gate", () => {
 
     expect(g.payload.allow).toBe(false);
     expect(String(g.payload.reason)).toMatch(/empty_auto_push_refs/);
+    expect(g.payload.code).toBe("deferred");
   });
 
   it("fails closed when the whitelist shape is not a list", () => {
@@ -144,6 +148,7 @@ describe.skipIf(PYTHON === null)("task.py delivery-gate", () => {
 
     expect(g.payload.allow).toBe(false);
     expect(String(g.payload.reason)).toMatch(/malformed_auto_push_refs/);
+    expect(g.payload.code).toBe("config");
   });
 
   it("protects the default branch resolved from git facts", () => {
@@ -152,6 +157,7 @@ describe.skipIf(PYTHON === null)("task.py delivery-gate", () => {
 
     expect(facts.payload.allow).toBe(false);
     expect(String(facts.payload.reason)).toMatch(/protected_ref\(default_branch=main/);
+    expect(facts.payload.code).toBe("protected");
     const f = facts.payload.facts as Record<string, unknown>;
     expect(f.default_branch).toBe("main");
     expect(f.default_source).toBeTruthy();
@@ -184,6 +190,7 @@ describe.skipIf(PYTHON === null)("task.py delivery-gate", () => {
 
     expect(g.payload.allow).toBe(false);
     expect(String(g.payload.reason)).toMatch(/protected_ref\(tag\)/);
+    expect(g.payload.code).toBe("protected");
   });
 
   it("honours an explicit protected_refs list on top of the facts", () => {
