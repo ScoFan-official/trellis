@@ -179,7 +179,7 @@ Autonomy mode comes from `.trellis/config.yaml` `autonomy: gated | hands-off | s
 
 Use a parent task when one user request contains several independently verifiable deliverables. The parent task owns the source requirement set, the task map, cross-child acceptance criteria, and final integration review; it normally should not be the implementation target unless it also has direct work.
 
-Use child tasks for deliverables that can be planned, implemented, checked, and archived independently. Parent/child structure is not a dependency system: if one child must wait for another, write that ordering in the child `prd.md` / `implement.md` and keep each child's acceptance criteria testable.
+Use child tasks for deliverables that can be planned, implemented, checked, and archived independently. Parent/child is containment, not ordering: when one child must wait for another, record it as a dependency with `task.py set-meta <child> blocked_by "<dir-or-slug> ..."`, and `task.py frontier` keeps that child out of the ready set until every blocker is done or archived. Sequencing that is not a hard blocker still belongs in the child `prd.md` / `implement.md`, and each child's acceptance criteria stays testable.
 
 Create new children with `task.py create "<title>" --slug <name> --parent <parent-dir>`. Link existing tasks with `task.py add-subtask <parent> <child>`, and unlink mistakes with `task.py remove-subtask <parent> <child>`.
 
@@ -379,7 +379,7 @@ When considering a parent/child split:
 - Use a parent task when one request contains several independently verifiable deliverables.
 - Parent tasks own source requirements, child-task mapping, cross-child acceptance criteria, and final integration review.
 - Child tasks own actual deliverables that can be planned, implemented, checked, and archived independently.
-- Parent/child structure is not a dependency system. If child B depends on child A, write that ordering in child B's `prd.md` / `implement.md`.
+- Parent/child structure is containment, not dependency. Hard ordering is the formal `blocked_by` field (`task.py set-meta <task> blocked_by "<dir-or-slug> ..."`), which `task.py frontier` resolves into the ready set; write softer sequencing in the child's `prd.md` / `implement.md`.
 - Start the child task that owns the next deliverable. Do not start the parent unless the parent itself has direct implementation work.
 
 Return to this step whenever requirements change and revise the relevant artifact.
